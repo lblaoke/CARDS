@@ -1,7 +1,7 @@
 from reward_sampling import RewardSampling
 
 rs = RewardSampling(llm_dir='argsearch/llama-7b-sft-float32', rm_dir='argsearch/llama-7b-rm-float32')
-rs = RewardSampling(access_token='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', llm_dir='mistralai/Mistral-7B-Instruct-v0.2', rm_dir='weqweasdas/RM-Mistral-7B')
+rs = RewardSampling(access_token=None, llm_dir='mistralai/Mistral-7B-Instruct-v0.2', rm_dir='weqweasdas/RM-Mistral-7B')
 
 # reward: batch_size x 1
 # reward = rs.rm_score(['How to write a paper?', 'How are you?'])
