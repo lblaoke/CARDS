@@ -26,7 +26,7 @@ rs.rm_score(['###Human: How are you doing today? ###Assistant: I am doing well t
 
 ## Dataset Evaluations
 ```
-CUDA_VISIBLE_DEVICES=6 python evaluation/text_generation.py --method rs --save your_name --num-test-prompt 10
+CUDA_VISIBLE_DEVICES=0 python evaluation/text_generation.py --method rs --save your_name --num-test-prompt 300
 ```
 
 ## Citation
