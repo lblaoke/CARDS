@@ -7,8 +7,9 @@
 ```
 git clone https://github.com/lblaoke/CARDS.git
 cd CARDS/
-conda create --name cards --file requirements.txt
+conda create -n cards python=3.9 -y
 conda activate cards
+pip install -r requirements.txt
 ```
 
 ## Examples
