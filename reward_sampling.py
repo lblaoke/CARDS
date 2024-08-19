@@ -62,6 +62,7 @@ class RewardSampling(BaseRewardSampling):
                 self.RM.resize_token_embeddings(len(self.tokenizer))
                 self.RM.eval()
 
+    # Vanilla LLM
     @torch.no_grad()
     def generate(self, prompt, max_new_token:int=128):
         tokens, mask = self.from_text_to_token(prompt)
@@ -80,6 +81,7 @@ class RewardSampling(BaseRewardSampling):
         reward = reward.mean().item()
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
 
+    # ARGS: Alignment as Reward-Guided Search
     @torch.no_grad()
     def args_generate(self, prompt, args_weight:float=1.5, topk:int=40, max_new_token:int=128):
         tokens, mask = self.from_text_to_token(prompt)
@@ -114,13 +116,14 @@ class RewardSampling(BaseRewardSampling):
         reward = reward.mean().item()
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
 
+    # CARDS (ours)
     @torch.no_grad()
     def rs_generate(
         self                                ,
         prompt                              ,
         option              : str   = 'soft',
         entropy_threshold   : float = 3.0   ,
-        reward_threshold    : float = 9.0   ,
+        reward_threshold    : float = 8.5   ,
         alpha               : float = 0.5   ,
         beta                : float = 0.7   ,
         topk                : int   = 40    ,
@@ -195,6 +198,7 @@ class RewardSampling(BaseRewardSampling):
 
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
 
+    # Naive RS: Item-level Rejection Sampling
     @torch.no_grad()
     def naive_rs_generate(
         self                                ,
@@ -250,15 +254,102 @@ class RewardSampling(BaseRewardSampling):
 
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
 
+    # Sentence-level Rejection Sampling
+    @torch.no_grad()
+    def sentence_rs_generate(
+        self                                ,
+        prompt                              ,
+        option              : str   = 'soft',
+        reward_threshold    : float = 8.0   ,
+        alpha               : float = 1.0   ,
+        beta                : float = 1.0   ,
+        topk                : int   = 100   ,
+        max_new_token       : int   = 128   ,
+        debug               : bool  = False
+    ):
+        tokens, mask = self.from_text_to_token(prompt)
+        len_prompt = tokens.shape[1]
+        best_candidate, best_candidate_mask, best_reward = None, None, -1e34
+        num_regeneration, num_llm_call, num_rm_call = 0, 0, 0
+        llm_cache, rm_cache = None, None
+
+        reward0, rm_cache = self.from_token_to_reward(tokens, mask, rm_cache)
+        reward0 = (1 - alpha) * reward0.mean().item() + alpha * reward_threshold
+        if debug: print(f'{reward0=:.2f}')
+
+        def accept_check(reward, candidate):
+            threshold = reward0 + (candidate.shape[1] - len_prompt) * (reward_threshold - reward0) / max_new_token
+            threshold = min(threshold, reward_threshold)
+            if debug: print(f'{reward=:.2f}, {threshold=:.2f}')
+
+            if option == 'hard':
+                return reward >= threshold
+            elif option == 'soft':
+                return random.uniform(0, 1) < min(1., exp((reward - threshold) / beta))
+            else:
+                assert False, 'Invalid reward sampling option!'
+
+        while tokens.shape[1] - len_prompt < max_new_token:
+
+            # sample a new candidate
+            candidate = tokens.clone()
+            candidate_mask = mask.clone()
+
+            while candidate.shape[1] - tokens.shape[1] < 64:
+                logits, llm_cache = self.from_token_to_logit(candidate, candidate_mask, llm_cache)
+                num_llm_call += len(tokens)
+                
+                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
+                candidate = torch.cat([candidate, selected_token], dim=-1)
+                candidate_mask = torch.cat([candidate_mask, torch.ones_like(selected_token)], dim=-1)
+
+                if debug: print(f'{selected_token.shape=}')
+
+                if candidate.shape[1] - tokens.shape[1] >= 4 and '.' in self.from_token_to_text(selected_token):
+                    del logits
+                    break
+
+            if debug: print(f'Segment length = {candidate.shape[1] - tokens.shape[1]}')
+
+            # evaluate the candidate
+            reward, rm_cache = self.from_token_to_reward(candidate, candidate_mask, rm_cache)
+            num_rm_call += len(tokens)
+            reward = reward.mean().item()
+
+            if reward > best_reward:
+                del best_candidate, best_candidate_mask
+                best_candidate, best_candidate_mask, best_reward = candidate.clone(), candidate_mask.clone(), reward
+
+            # accept/reject the candidate
+            if num_regeneration >= 20:
+                del tokens, mask, candidate, candidate_mask
+                best_reward = -1e34
+                tokens, mask = best_candidate, best_candidate_mask
+                num_regeneration = 0
+            elif accept_check(reward, candidate):
+                del tokens, mask, best_candidate, best_candidate_mask
+                best_candidate, best_candidate_mask, best_reward = None, None, -1e34
+                tokens, mask = candidate, candidate_mask
+                num_regeneration = 0
+            else:
+                del candidate, candidate_mask
+                num_regeneration += 1
+                if debug: print(f'Rejected {num_regeneration} times!')
+
+        return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
+
+    # Output Reward
     @torch.no_grad()
     def rm_score(self, text):
         tokens, mask = self.from_text_to_token(text)
         reward, _ = self.from_token_to_reward(tokens, mask)
         return reward
 
+    # Output Uncertainty (incomplete)
     def show_uncertainty(self, text):
         pass
 
+    # Update Tokens by the Gradients of Rewards (incomplete)
     def RM_update_tokens(self, text, num_iter:int=10, lr:float=0.1):
 
         # from sentences to tokens
@@ -295,6 +386,7 @@ class RewardSampling(BaseRewardSampling):
             text.append(self.get_text_from_tokens([tokens[0,i].item()])[0])
         return text
 
+    # Update Embeddings by the Gradients of Rewards (incomplete)
     def RM_update_embeddings(self, text, num_iter:int=10, lr:float=0.1):
 
         # from sentences to embeddings

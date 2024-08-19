@@ -17,11 +17,13 @@ from tqdm import tqdm
 parser = argparse.ArgumentParser()
 parser.add_argument('--llm-dir', type=str, default='argsearch/llama-7b-sft-float32')
 parser.add_argument('--rm-dir', type=str, default='argsearch/llama-7b-rm-float32')
+# parser.add_argument('--llm-dir', type=str, default='mistralai/Mistral-7B-Instruct-v0.2')
+# parser.add_argument('--rm-dir', type=str, default='weqweasdas/RM-Mistral-7B')
 parser.add_argument('--data-dir', type=str, default='Dahoas/full-hh-rlhf')
 
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--num-test-prompt', type=int, default=3125)
-parser.add_argument('--uncertainty-threshold', type=float, default=3.)
+parser.add_argument('--uncertainty-threshold', type=float, default=2.)
 
 args = parser.parse_args()
 
@@ -44,13 +46,16 @@ with autocast(dtype=torch.bfloat16):
             u = uncertainty.entropy(full_logit).detach().cpu()[0]
         
         partition_mask = (u > args.uncertainty_threshold)
-        response_partial, l = [], 0
-        for i in range(3, len(partition_mask)):
+        response_partial = None
+
+        for i in range(len(partition_mask) - 1, 0, -1):
             if partition_mask[i]:
-                response_partial.append(rs.from_token_to_text(tokens[:,l:i])[0])
-                l = i
-        if l < len(partition_mask) - 1:
-            response_partial.append(rs.from_token_to_text(tokens[:,l:])[0])
+                response_partial = rs.from_token_to_text(tokens[:,:i])[0]
+                break
+
+        if response_partial is None:
+            response_partial = rs.from_token_to_text(tokens[:,:int(len(partition_mask)*3/4)])[0]
+
         r_partial = rs.rm_score(response_partial).detach().cpu()
         reward_partial = torch.cat([reward_partial, r_partial.mean().unsqueeze(0)])
         num_subsentence.append(len(response_partial))
