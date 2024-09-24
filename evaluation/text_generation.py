@@ -62,7 +62,7 @@ num_batch, total_reward, total_num_llm_call, total_num_rm_call = 0, 0, 0, 0
 if args.save is not None:
     f = open(f'{args.save}.jsonl', 'w')
 
-with autocast(dtype=torch.bfloat16):
+with autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
     for prompt, _ in tqdm(test_data):
         if args.method == 'rs':
             response, (reward, num_llm_call, num_rm_call) = rs.rs_generate(
