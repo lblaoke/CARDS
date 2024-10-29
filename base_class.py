@@ -60,14 +60,20 @@ class BaseRewardSampling:
         return torch.argmin(torch.norm(weights - embedding, dim=-1), dim=-1)
 
     def from_embedding_to_logit(self, embedding, mask=None, cache=None):
-        prepared_inputs = self.LLM.prepare_inputs_for_generation(input_ids=None, inputs_embeds=embedding, attention_mask=mask, past=cache, use_cache=(cache is not None))
-        out = self.LLM(**prepared_inputs)
+        out = self.LLM(
+            input_ids           = None                  ,
+            attention_mask      = mask                  ,
+            past_key_values     = cache                 ,
+            inputs_embeds       = embedding             ,
+            use_cache           = (cache is not None)   ,
+            num_logits_to_keep  = 1
+        )
         logits, cache = out.logits[:, -1], out.past_key_values
         del out
         return logits, cache
 
     def from_embedding_to_reward(self, embedding, mask=None, cache=None):
-        prepared_inputs = self.LLM.prepare_inputs_for_generation(input_ids=None, inputs_embeds=embedding, attention_mask=mask, past=cache, use_cache=(cache is not None))
+        prepared_inputs = self.LLM.prepare_inputs_for_generation(input_ids=None, inputs_embeds=embedding, attention_mask=mask, past_key_values=cache, use_cache=(cache is not None))
         
         if 'cache_position' in prepared_inputs:
             del prepared_inputs['cache_position']
@@ -78,14 +84,19 @@ class BaseRewardSampling:
         return reward, cache
 
     def from_token_to_logit(self, token, mask=None, cache=None):
-        prepared_inputs = self.LLM.prepare_inputs_for_generation(input_ids=token, attention_mask=mask, past=cache, use_cache=(cache is not None))
-        out = self.LLM(**prepared_inputs)
+        out = self.LLM(
+            input_ids           = token                 ,
+            attention_mask      = mask                  ,
+            past_key_values     = cache                 ,
+            use_cache           = (cache is not None)   ,
+            num_logits_to_keep  = 1
+        )
         logits, cache = out.logits[:, -1], out.past_key_values
         del out
         return logits, cache
 
     def from_token_to_reward(self, token, mask=None, cache=None):
-        prepared_inputs = self.LLM.prepare_inputs_for_generation(input_ids=token, attention_mask=mask, past=cache, use_cache=(cache is not None))
+        prepared_inputs = self.LLM.prepare_inputs_for_generation(input_ids=token, attention_mask=mask, past_key_values=cache, use_cache=(cache is not None))
         
         if 'cache_position' in prepared_inputs:
             del prepared_inputs['cache_position']

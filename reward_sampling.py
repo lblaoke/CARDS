@@ -30,26 +30,28 @@ class RewardSampling(BaseRewardSampling):
 
         print('==> Loading LLM...')
         self.LLM = AutoModelForCausalLM.from_pretrained(
-            llm_dir                                                             ,
-            cache_dir   = cache_dir                                             ,
-            token       = access_token                                          ,
-            torch_dtype = torch.bfloat16 if (fp_bit == 16) else torch.float32   ,
-            load_in_8bit= (fp_bit == 8)                                         ,
-            load_in_4bit= (fp_bit == 4)                                         ,
-            device_map  = device_map
+            llm_dir                                                                     ,
+            cache_dir           = cache_dir                                             ,
+            token               = access_token                                          ,
+            torch_dtype         = torch.bfloat16 if (fp_bit == 16) else torch.float32   ,
+            load_in_8bit        = (fp_bit == 8)                                         ,
+            load_in_4bit        = (fp_bit == 4)                                         ,
+            device_map          = device_map                                            ,
+            attn_implementation = 'flash_attention_2'
         )
 
         if rm_dir is not None:
             print('==> Loading RM...')
             self.RM = AutoModelForSequenceClassification.from_pretrained(
-                rm_dir                                                              ,
-                cache_dir   = cache_dir                                             ,
-                token       = access_token                                          ,
-                num_labels  = 1                                                     ,
-                torch_dtype = torch.bfloat16 if (fp_bit == 16) else torch.float32   ,
-                load_in_8bit= (fp_bit == 8)                                         ,
-                load_in_4bit= (fp_bit == 4)                                         ,
-                device_map  = device_map
+                rm_dir                                                                      ,
+                cache_dir           = cache_dir                                             ,
+                token               = access_token                                          ,
+                num_labels          = 1                                                     ,
+                torch_dtype         = torch.bfloat16 if (fp_bit == 16) else torch.float32   ,
+                load_in_8bit        = (fp_bit == 8)                                         ,
+                load_in_4bit        = (fp_bit == 4)                                         ,
+                device_map          = device_map                                            ,
+                attn_implementation = 'flash_attention_2'
             )
 
         if self.tokenizer.pad_token is None:
