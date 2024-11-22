@@ -85,7 +85,7 @@ class RewardSampling(BaseRewardSampling):
 
     # ARGS: Alignment as Reward-Guided Search
     @torch.no_grad()
-    def args_generate(self, prompt, args_weight:float=1.5, topk:int=40, max_new_token:int=128):
+    def args_generate(self, prompt, args_weight:float=1.5, topk:int=20, max_new_token:int=128):
         tokens, mask = self.from_text_to_token(prompt)
         num_llm_call, num_rm_call = 0, 0
         llm_cache, rm_cache = None, None
@@ -339,6 +339,32 @@ class RewardSampling(BaseRewardSampling):
                 if debug: print(f'Rejected {num_regeneration} times!')
 
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
+
+    # Item-level Best-of-N
+    @torch.no_grad()
+    def bon_generate(self, prompt, n:int=10, topk:int=20, beta:float=1.0, max_new_token:int=128):
+        num_llm_call, num_rm_call = 0, 0
+        llm_cache = None
+        tokens_best, reward_best = None, -1e34
+
+        for _ in range(n):
+            tokens, mask = self.from_text_to_token(prompt)
+
+            for _ in range(max_new_token):
+                logits, llm_cache = self.from_token_to_logit(tokens, mask, llm_cache)
+                num_llm_call += len(tokens)
+                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
+
+                tokens = torch.cat([tokens, selected_token], dim=-1)
+                mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
+
+            reward, _ = self.from_token_to_reward(tokens, mask)
+            num_rm_call += len(tokens)
+            reward = reward.mean().item()
+            if reward > reward_best:
+                tokens_best, reward_best = tokens.clone(), reward
+            
+        return self.from_token_to_text(tokens_best), (reward_best, num_llm_call, num_rm_call)
 
     # Output Reward
     @torch.no_grad()

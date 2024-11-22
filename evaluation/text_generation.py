@@ -17,13 +17,15 @@ parser.add_argument('--method', type=str, default='rs')
 parser.add_argument('--save', type=str, default=None)
 
 # Llama LLM Choices
-parser.add_argument('--llm-dir', type=str, default='argsearch/llama-7b-sft-float32')
+# parser.add_argument('--llm-dir', type=str, default='argsearch/llama-7b-sft-float32')
+parser.add_argument('--llm-dir', type=str, default='meta-llama/Llama-2-13b-chat-hf')
 # parser.add_argument('--llm-dir', type=str, default='ewqr2130/llama_ppo_1e6_new_tokenizerstep_8000')
 # parser.add_argument('--llm-dir', type=str, default='AmberYifan/llama-7b-sft-DPO')
 
 # Llama RM Choices
-parser.add_argument('--rm-dir', type=str, default='argsearch/llama-7b-rm-float32')
+# parser.add_argument('--rm-dir', type=str, default='argsearch/llama-7b-rm-float32')
 # parser.add_argument('--rm-dir', type=str, default='weqweasdas/hh_rlhf_rm_open_llama_3b')
+parser.add_argument('--rm-dir', type=str, default='miulab/llama2-7b-ultrafeedback-rm')
 
 # Mistral LLM Choices
 # parser.add_argument('--llm-dir', type=str, default='mistralai/Mistral-7B-Instruct-v0.2')
@@ -36,10 +38,12 @@ parser.add_argument('--rm-dir', type=str, default='argsearch/llama-7b-rm-float32
 
 # Datasets
 parser.add_argument('--data-dir', type=str, default='Dahoas/full-hh-rlhf')
+# parser.add_argument('--data-dir', type=str, default='nvidia/HelpSteer')
+# parser.add_argument('--data-dir', type=str, default='PKU-Alignment/BeaverTails')
 
 # Common Options
 parser.add_argument('--seed', type=int, default=1)
-parser.add_argument('--num-test-prompt', type=int, default=1000)
+parser.add_argument('--num-test-prompt', type=int, default=50)
 parser.add_argument('--batch-size', type=int, default=1)
 parser.add_argument('--max-new-token', type=int, default=128)
 
@@ -52,7 +56,7 @@ parser.add_argument('--beta', type=float, default=0.7)
 args = parser.parse_args()
 
 rs = RewardSampling(access_token=None, llm_dir=args.llm_dir, rm_dir=args.rm_dir, seed=args.seed)
-test_data = data_loader.QA_loader(args.data_dir, split='test', batch_size=args.batch_size, head=args.num_test_prompt)
+test_data = data_loader.fast_QA_loader(args.data_dir, split='test', batch_size=args.batch_size, head=args.num_test_prompt)
 
 # OOD Test Data
 # test_data = data_loader.UF_loader(batch_size=args.batch_size, head=args.num_test_prompt)
@@ -62,7 +66,7 @@ num_batch, total_reward, total_num_llm_call, total_num_rm_call = 0, 0, 0, 0
 if args.save is not None:
     f = open(f'{args.save}.jsonl', 'w')
 
-with autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
+with autocast(dtype=torch.bfloat16, enabled=True):
     for prompt, _ in tqdm(test_data):
         if args.method == 'rs':
             response, (reward, num_llm_call, num_rm_call) = rs.rs_generate(
@@ -98,6 +102,8 @@ with autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
                 max_new_token=args.max_new_token,
                 reward_threshold=args.reward
             )
+        elif args.method == 'bon':
+            response, (reward, num_llm_call, num_rm_call) = rs.bon_generate(prompt, max_new_token=args.max_new_token)
         elif args.method == 'args':
             response, (reward, num_llm_call, num_rm_call) = rs.args_generate(prompt, max_new_token=args.max_new_token)
         else:
