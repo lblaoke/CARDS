@@ -62,7 +62,6 @@ class RewardSampling(BaseRewardSampling):
 
             if self.RM is not None:
                 self.RM.resize_token_embeddings(len(self.tokenizer))
-                self.RM.eval()
 
     # Vanilla LLM
     @torch.no_grad()
@@ -85,7 +84,7 @@ class RewardSampling(BaseRewardSampling):
 
     # ARGS: Alignment as Reward-Guided Search
     @torch.no_grad()
-    def args_generate(self, prompt, args_weight:float=1.5, topk:int=20, max_new_token:int=128):
+    def token_bon_generate(self, prompt, args_weight:float=1.5, topk:int=20, max_new_token:int=128):
         tokens, mask = self.from_text_to_token(prompt)
         num_llm_call, num_rm_call = 0, 0
         llm_cache, rm_cache = None, None
@@ -118,9 +117,9 @@ class RewardSampling(BaseRewardSampling):
         reward = reward.mean().item()
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
 
-    # CARDS (ours)
+    # CARDS: Cascade Reward Sampling for Efficient Decoding-Time Alignment
     @torch.no_grad()
-    def rs_generate(
+    def seg_rs_generate(
         self                                ,
         prompt                              ,
         option              : str   = 'soft',
@@ -200,9 +199,9 @@ class RewardSampling(BaseRewardSampling):
 
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
 
-    # Naive RS: Item-level Rejection Sampling
+    # Item-level rejection sampling
     @torch.no_grad()
-    def naive_rs_generate(
+    def rs_generate(
         self                                ,
         prompt                              ,
         reward_threshold    : float = 8.5   ,
@@ -256,16 +255,16 @@ class RewardSampling(BaseRewardSampling):
 
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
 
-    # Sentence-level Rejection Sampling
+    # Sentence-level rejection sampling
     @torch.no_grad()
-    def sentence_rs_generate(
+    def seg_sentence_rs_generate(
         self                                ,
         prompt                              ,
         option              : str   = 'soft',
-        reward_threshold    : float = 8.0   ,
-        alpha               : float = 1.0   ,
-        beta                : float = 1.0   ,
-        topk                : int   = 100   ,
+        reward_threshold    : float = 8.5   ,
+        alpha               : float = 0.5   ,
+        beta                : float = 0.7   ,
+        topk                : int   = 40   ,
         max_new_token       : int   = 128   ,
         debug               : bool  = False
     ):
@@ -366,86 +365,186 @@ class RewardSampling(BaseRewardSampling):
             
         return self.from_token_to_text(tokens_best), (reward_best, num_llm_call, num_rm_call)
 
-    # Output Reward
+    # BOLT: Fast Energy-based Controlled Text Generation with Tunable Biases
+    def bolt_generate(self, prompt, reward_threshold:float=8.5, topk:int=40, beta:float=0.7, max_new_token:int=128):
+        tokens, mask = self.from_text_to_token(prompt)
+        batch_size = tokens.shape[0]
+
+        # gradient accumulation of the past candidates
+        bias = torch.randn((batch_size, tokens.shape[1] + max_new_token, self.tokenizer.vocab_size), dtype=torch.bfloat16, requires_grad=True, device=tokens.device)
+        optimizer = torch.optim.AdamW([bias], lr=0.1)
+
+        best_candidate, best_candidate_mask, best_reward = None, None, -1e34
+        num_operation = {
+            "regeneration": 0,
+            "llm_call": 0,
+            "rm_call": 0,
+            "rm_grad_cal": 0,
+            "llm_grad_cal": 0,
+        }
+        llm_cache, rm_cache = None, None
+
+        while True:
+
+            # sample a new candidate
+            candidate = tokens.clone()
+            candidate_mask = mask.clone()
+
+            while candidate.shape[1] - tokens.shape[1] < max_new_token:
+                if candidate.shape[1] - tokens.shape[1] == max_new_token - 1:
+                    full_logits, llm_cache = self.from_token_to_full_logit(candidate, candidate_mask, llm_cache)
+                    logits = full_logits[:, -1]
+
+                    # add unconditioned logits for the first token
+                    logit_first_token = torch.zeros_like(logits).unsqueeze(-2).requires_grad_()
+                    full_logits = torch.cat([logit_first_token, logit_first_token, full_logits[:, :-1, :]], dim=-2)
+                else:
+                    logits, llm_cache = self.from_token_to_logit(candidate, candidate_mask, llm_cache)
+
+                num_operation["llm_call"] += batch_size
+
+                # modify the logits based on gradient direction
+                logits = logits + (1 - (candidate.shape[1] - tokens.shape[1]) / max_new_token) * bias[:, candidate.shape[1]]
+
+                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
+                candidate = torch.cat([candidate, selected_token], dim=-1)
+                candidate_mask = torch.cat([candidate_mask, torch.ones_like(selected_token)], dim=-1)
+
+            # STE soft onehot tokens
+            soft_onehot_tokens = torch.nn.functional.one_hot(candidate, num_classes=self.tokenizer.vocab_size).to(torch.bfloat16).requires_grad_()            
+            softmax_dist = F.softmax(full_logits / beta, dim=-1)
+            soft_onehot_tokens = soft_onehot_tokens + softmax_dist - softmax_dist.detach()
+
+            # evaluate the candidate
+            embedding = self.from_onehot_token_to_embedding(soft_onehot_tokens, self.RM)
+            reward, rm_cache = self.from_embedding_to_reward(embedding, candidate_mask, rm_cache)
+
+            # calculate the gradient
+            self.RM.zero_grad(set_to_none=True)
+            soft_onehot_tokens.grad = None
+            optimizer.zero_grad(set_to_none=True)
+            bias.grad = torch.autograd.grad(reward.sum(), soft_onehot_tokens, retain_graph=False, create_graph=False)[0].to(torch.bfloat16)
+            optimizer.step()
+
+            num_operation["rm_call"] += batch_size
+            reward = reward.mean().item()
+
+            if reward > best_reward:
+                del best_candidate, best_candidate_mask
+                best_candidate, best_candidate_mask, best_reward = candidate.clone(), candidate_mask.clone(), reward
+
+            # accept/reject the candidate
+            if num_operation["regeneration"] >= 50:
+                del tokens, mask, candidate, candidate_mask, bias
+                tokens, mask = best_candidate, best_candidate_mask
+                break
+            elif random.uniform(0, 1) < min(1., exp((reward - reward_threshold) / beta)):
+                del tokens, mask, best_candidate, best_candidate_mask, bias
+                tokens, mask = candidate, candidate_mask
+                best_reward = reward
+                break
+            else:
+                del candidate, candidate_mask
+                num_operation["regeneration"] += 1
+
+        return self.from_token_to_text(tokens), best_reward, num_operation
+
+    # Item-level gradient-guided rejection sampling
+    def grad_rs_generate(
+        self,
+        prompt,
+        reward_threshold: float = 8.5,
+        lr: float = 1.0,
+        beta: float = 0.7,
+        topk: int = 40,
+        max_new_token: int = 128,
+    ):
+        tokens, mask = self.from_text_to_token(prompt)
+        batch_size = tokens.shape[0]
+
+        # gradient direction of the last candidate
+        grad, grad_count = None, 0
+    
+        best_candidate, best_reward = None, -1e34
+        num_operation = {
+            "regeneration": 0,
+            "llm_call": 0,
+            "rm_call": 0,
+            "rm_grad_cal": 0,
+            "llm_grad_cal": 0,
+        }
+        llm_cache, rm_cache = None, None
+
+        while True:
+
+            # sample a new candidate
+            candidate = tokens.clone()
+
+            while candidate.shape[1] - tokens.shape[1] < max_new_token:
+                if candidate.shape[1] - tokens.shape[1] == max_new_token - 1:
+                    full_logits, llm_cache = self.from_token_to_full_logit(candidate, mask, llm_cache)
+                    logits = full_logits[:, -1]
+
+                    # add unconditioned logits for the first token
+                    logit_first_token = torch.zeros_like(logits).unsqueeze(-2).requires_grad_()
+                    full_logits = torch.cat([logit_first_token, logit_first_token, full_logits[:, :-1, :]], dim=-2)
+                else:
+                    logits, llm_cache = self.from_token_to_logit(candidate, mask, llm_cache)
+
+                num_operation["llm_call"] += batch_size
+
+                # modify the logits based on gradient direction
+                if grad is not None:
+                    logits = logits + lr * (1 - (candidate.shape[1] - tokens.shape[1]) / max_new_token) / beta * grad[:, candidate.shape[1]]
+
+                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
+                candidate = torch.cat([candidate, selected_token], dim=-1)
+                mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
+
+            # STE soft onehot tokens
+            soft_onehot_tokens = torch.nn.functional.one_hot(candidate, num_classes=self.tokenizer.vocab_size).to(torch.bfloat16).requires_grad_()            
+            softmax_dist = F.softmax(full_logits / beta, dim=-1)
+            soft_onehot_tokens = soft_onehot_tokens + softmax_dist - softmax_dist.detach()
+
+            # evaluate the candidate
+            embedding = self.from_onehot_token_to_embedding(soft_onehot_tokens, self.RM)
+            reward, rm_cache = self.from_embedding_to_reward(embedding, mask, rm_cache)
+
+            # calculate the gradient
+            self.RM.zero_grad(set_to_none=True)
+            soft_onehot_tokens.grad = None
+            grad = torch.autograd.grad(reward.sum(), soft_onehot_tokens, retain_graph=False, create_graph=False)[0]
+            # grad_count += 1
+            # if grad is not None:
+            #     grad = (1 - 1 / grad_count) * grad + (1 / grad_count) * new_grad
+            # else:
+            #     grad = new_grad
+
+            num_operation["rm_call"] += batch_size
+            reward = reward.mean().item()
+
+            if reward > best_reward:
+                del best_candidate
+                best_candidate, best_reward = candidate.clone(), reward
+
+            # accept/reject the candidate
+            if num_operation["regeneration"] >= 50:
+                del tokens, mask, candidate, grad
+                tokens = best_candidate
+                break
+            elif random.uniform(0, 1) < min(1., exp((reward - reward_threshold) / beta)):
+                del tokens, mask, best_candidate, grad
+                tokens = candidate
+                best_reward = reward
+                break
+            else:
+                del candidate
+                num_operation["regeneration"] += 1
+
+        return self.from_token_to_text(tokens), best_reward, num_operation
+
     @torch.no_grad()
     def rm_score(self, text):
         tokens, mask = self.from_text_to_token(text)
         reward, _ = self.from_token_to_reward(tokens, mask)
         return reward
-
-    # Output Uncertainty (incomplete)
-    def show_uncertainty(self, text):
-        pass
-
-    # Update Tokens by the Gradients of Rewards (incomplete)
-    def RM_update_tokens(self, text, num_iter:int=10, lr:float=0.1):
-
-        # from sentences to tokens
-        tokens = self.tokenizer(text, return_tensors='pt', padding=True).input_ids.to(self.RM.device)
-        onehot_tokens = torch.nn.functional.one_hot(tokens, num_classes=self.tokenizer.vocab_size).to(torch.float32)
-        onehot_tokens.requires_grad_()
-
-        # update the hidden states
-        batch_size = len(onehot_tokens)
-
-        for _ in range(num_iter):
-            self.RM.zero_grad()
-            onehot_tokens.grad = None
-
-            rewards = self.get_reward_from_onehot_tokens(onehot_tokens)
-
-            loss = -torch.nn.functional.logsigmoid(rewards).sum()
-            grad = torch.autograd.grad(loss, onehot_tokens, retain_graph=False, create_graph=False)[0]
-            grad_length = torch.sqrt(torch.sum(grad * grad, dim=-1))
-            grad_cos = torch.sum(grad * onehot_tokens, dim=-1) / grad_length
-            A = torch.stack([tokens[0], grad_length[0], grad_cos[0]])
-            print(A)
-            # break
-
-            onehot_tokens.data -= lr*grad
-            onehot_tokens.data /= onehot_tokens.data.sum(dim=-1, keepdim=True)
-
-            tokens = torch.argmax(onehot_tokens.data, dim=-1)
-            print(self.tokenizer.batch_decode(tokens, skip_special_tokens=True), rewards)
-
-        # return self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
-        text = []
-        for i in range(tokens.shape[1]):
-            text.append(self.get_text_from_tokens([tokens[0,i].item()])[0])
-        return text
-
-    # Update Embeddings by the Gradients of Rewards (incomplete)
-    def RM_update_embeddings(self, text, num_iter:int=10, lr:float=0.1):
-
-        # from sentences to embeddings
-        tokens = self.tokenizer(text, return_tensors='pt', padding=True).input_ids.to(self.RM.device)
-        embeddings = self.get_RM_embedding_from_tokens(tokens)
-
-        # update the hidden states
-        batch_size = len(embeddings)
-
-        for _ in range(num_iter):
-            self.RM.zero_grad()
-            embeddings.grad = None
-
-            rewards = self.get_reward_from_RM_embedding(embeddings)
-
-            loss = -torch.nn.functional.logsigmoid(rewards).sum()
-            grad = torch.autograd.grad(loss, embeddings, retain_graph=False, create_graph=False)[0]
-
-            # grad_length = torch.sqrt(torch.sum(grad * grad, dim=-1))
-            # embedding_length = torch.sqrt(torch.sum(embeddings * embeddings, dim=-1))
-
-            # grad_cos = torch.sum(grad * embeddings, dim=-1) / grad_length / embedding_length
-
-            grad_dot_product = torch.sum(grad * embeddings, dim=-1)
-
-            # A = torch.stack([tokens[0], grad_length[0], grad_cos[0]])
-            print(grad_dot_product)
-            break
-
-        # return self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
-        text = []
-        for i in range(tokens.shape[1]):
-            text.append(self.get_text_from_tokens([tokens[0,i].item()])[0])
-        return text

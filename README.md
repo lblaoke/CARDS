@@ -3,13 +3,11 @@
 
 ![image](./reward_sampling.png)
 
-## Environment
+## Recommended Environment
 ```
-git clone https://github.com/lblaoke/CARDS.git
-cd CARDS/
-conda create -n cards python=3.9 -y
-conda activate cards
-pip install -r requirements.txt
+python==3.10
+torch==2.1.2
+transformers==4.46.1
 ```
 
 ## Examples
