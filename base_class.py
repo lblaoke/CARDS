@@ -139,16 +139,43 @@ class BaseRewardSampling:
         return out.logits, out.past_key_values
 
     # RAIN (https://arxiv.org/abs/2309.07124)
-    def from_token_to_self_reward(self, token, mask=None, cache=None):
-        out = self.RM(
-            input_ids = token,
-            attention_mask = mask,
-            past_key_values = cache,
-            use_cache = (cache is not None),
-        )
-        reward, cache = out.logits.flatten(), out.past_key_values
-        del out
-        return reward, cache
+    def from_token_to_self_reward(self, f1, f2, r1, r2, text, cache=None):
+        reward = []
+        for t in text:
+            text1 = f1 + '\n\n' + t + '\n' + r1
+            text2 = f2 + '\n\n' + t + '\n' + r2
+
+            token1, mask1 = self.from_text_to_token(text1)
+            token2, mask2 = self.from_text_to_token(text2)
+            id_A = self.from_text_to_token('A')[0][0, -1].item()
+            id_B = self.from_text_to_token('B')[0][0, -1].item()
+
+            out1 = self.LLM(
+                input_ids = token1,
+                attention_mask = mask1,
+                past_key_values = cache,
+                use_cache = (cache is not None),
+                num_logits_to_keep = 1,
+            )
+            out2 = self.LLM(
+                input_ids = token2,
+                attention_mask = mask2,
+                past_key_values = cache,
+                use_cache = (cache is not None),
+                num_logits_to_keep = 1,
+            )
+
+            log_prob1_A = out1.logits[0, -1, id_A].reshape(1)
+            log_prob1_B = out1.logits[0, -1, id_B].reshape(1)
+            log_prob2_A = out2.logits[0, -1, id_A].reshape(1)
+            log_prob2_B = out2.logits[0, -1, id_B].reshape(1)
+
+            r_A = log_prob1_A - log_prob1_B
+            r_B = log_prob2_B - log_prob2_A
+
+            reward.append((r_A + r_B) / 2)
+
+        return torch.cat(reward), out1.past_key_values
 
     # TreeBoN (https://arxiv.org/abs/2410.16033)
     def from_token_to_weighted_implicit_reward(self, token, mask=None, cache=None, prompt_len:int=0):

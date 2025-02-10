@@ -6,10 +6,17 @@ rs = RewardSampling(llm_dir="argsearch/llama-7b-sft-float32", rm_dir="argsearch/
 
 # reward: batch_size x 1
 # print(rs.seg_sentence_rs_generate("Hi, ", max_new_token=8))
-print(rs.seg_punctuation_rs_generate('Human: Ivory soap seems to have been around forever. Do you know much about its history? Assistant:', max_new_token=128))
+# print(rs.seg_fix_rs_generate('Hi, ', max_new_token=8))
 
 # import torch
-# token = torch.tensor([[88,2,3,4,5,6,7,8,9,10,11]]).cuda()
-# # mask = torch.tensor([[0,0,0,1,1,1]]).cuda()
-# r = rs.from_token_to_weighted_implicit_reward(token, prompt_len=4)[0]
-# print(r.shape, r)
+# mask = torch.tensor([[0,0,0,1,1,1]]).cuda()
+with open('f1.txt') as f:
+    f1 = f.read()
+with open('f2.txt') as f:
+    f2 = f.read()
+with open('r1.txt') as f:
+    r1 = f.read()
+with open('r2.txt') as f:
+    r2 = f.read()
+r = rs.from_token_to_self_reward(f1, f2, r1, r2, 'Hi. I am a man.')[0]
+print(r)

@@ -263,8 +263,8 @@ class RewardSampling(BaseRewardSampling):
     def seg_fix_rs_generate(
         self,
         prompt,
-        method:str = 'treebon',
-        reward_threshold:float = 8.5,
+        method:str = 'rain',
+        reward_threshold:float = 3.5,
         alpha:float = 0.5,
         beta:float = 0.7,
         topk:int = 40,
@@ -279,7 +279,15 @@ class RewardSampling(BaseRewardSampling):
         if method == 'treebon':
             reward0, rm_cache = self.from_token_to_weighted_implicit_reward(tokens, mask, rm_cache)
         elif method == 'rain':
-            reward0, rm_cache = self.from_token_to_self_reward(tokens, mask, rm_cache)
+            with open('f1.txt') as f:
+                f1 = f.read()
+            with open('f2.txt') as f:
+                f2 = f.read()
+            with open('r1.txt') as f:
+                r1 = f.read()
+            with open('r2.txt') as f:
+                r2 = f.read()
+            reward0, rm_cache = self.from_token_to_self_reward(f1, f2, r1, r2, self.from_token_to_text(tokens), rm_cache)
         else:
             assert False, 'Invalid method!'
         reward0 = (1 - alpha) * reward0.mean().item() + alpha * reward_threshold
@@ -318,13 +326,12 @@ class RewardSampling(BaseRewardSampling):
             # evaluate the candidate
             if method == 'treebon':
                 reward, rm_cache = self.from_token_to_weighted_implicit_reward(candidate, candidate_mask, rm_cache)
-                num_rm_call += 2 * len(tokens)
             elif method == 'rain':
-                reward, rm_cache = self.from_token_to_self_reward(candidate, candidate_mask, rm_cache)
-                num_rm_call += len(tokens)
+                reward, rm_cache = self.from_token_to_self_reward(f1, f2, r1, r2, self.from_token_to_text(candidate), rm_cache)
             else:
                 assert False, 'Invalid method!'
 
+            num_rm_call += 2 * len(tokens)
             reward = reward.mean().item()
 
             if reward > best_reward:
@@ -433,7 +440,7 @@ class RewardSampling(BaseRewardSampling):
 
     # Item-level Best-of-N
     @torch.no_grad()
-    def bon_generate(self, prompt, n:int=10, topk:int=20, beta:float=1.0, max_new_token:int=128):
+    def bon_generate(self, prompt, n:int=10, topk:int=40, beta:float=1.0, max_new_token:int=128):
         num_llm_call, num_rm_call = 0, 0
         llm_cache = None
         tokens_best, reward_best = None, -1e34
@@ -638,6 +645,15 @@ class RewardSampling(BaseRewardSampling):
     @torch.no_grad()
     def rm_score(self, text):
         tokens, mask = self.from_text_to_token(text)
-        # reward, _ = self.from_token_to_reward(tokens, mask)
-        reward, _ = self.from_token_to_weighted_implicit_reward(tokens, mask)
+        reward, _ = self.from_token_to_reward(tokens, mask)
+        # reward, _ = self.from_token_to_weighted_implicit_reward(tokens, mask)
+        # with open('f1.txt') as f:
+        #     f1 = f.read()
+        # with open('f2.txt') as f:
+        #     f2 = f.read()
+        # with open('r1.txt') as f:
+        #     r1 = f.read()
+        # with open('r2.txt') as f:
+        #     r2 = f.read()
+        # reward, _ = self.from_token_to_self_reward(f1, f2, r1, r2, text)
         return reward

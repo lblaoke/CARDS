@@ -66,8 +66,7 @@ print(f'{args.llm_dir=}')
 print(f'{args.rm_dir=}\n')
 
 # init sampler
-# sampler = RewardSampling(access_token=None, llm_dir=args.llm_dir, rm_dir=args.rm_dir, seed=args.seed)
-sampler = RewardSampling(access_token=None, llm_dir=args.llm_dir, dpo_dir=args.dpo_dir, seed=args.seed)
+sampler = RewardSampling(access_token=None, llm_dir=args.llm_dir, rm_dir=args.rm_dir, dpo_dir=args.dpo_dir, seed=args.seed)
 
 # data = data_loader.QA_loader(args.data_dir, split='test', batch_size=args.batch_size, head=args.num_test_prompt)
 # data = data_loader.UF_loader(batch_size=args.batch_size, head=args.num_test_prompt)
@@ -124,22 +123,22 @@ with autocast(dtype=torch.bfloat16, enabled=True):
                 reward_threshold=args.reward
             )
 
-        elif args.method == 'treebon': # max_r = 3.5
+        elif args.method == 'treebon': # max_r = 4.0
             assert args.batch_size == 1, 'treebon does not support batch_size > 1'
             response, (reward, num_llm_call, num_rm_call) = sampler.seg_fix_rs_generate(
                 prompt,
                 method='treebon',
                 max_new_token=args.max_new_token,
-                reward_threshold=args.reward
+                reward_threshold=4.0#args.reward
             )
 
-        elif args.method == 'rain':
+        elif args.method == 'rain': # max_r = 1.5
             assert args.batch_size == 1, 'rain does not support batch_size > 1'
             response, (reward, num_llm_call, num_rm_call) = sampler.seg_fix_rs_generate(
                 prompt,
                 method='rain',
                 max_new_token=args.max_new_token,
-                reward_threshold=args.reward
+                reward_threshold=1.5#args.reward
             )
 
         elif args.method == 'bon':
