@@ -4,7 +4,7 @@ import numpy as np
 import random
 
 def _gpu_init(seed:int=None):
-    assert torch.cuda.is_available(), "GPU not available!"
+    assert torch.cuda.is_available(), 'GPU not available!'
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True
 
@@ -22,13 +22,14 @@ class BaseRewardSampling:
         self.tokenizer = None
         self.LLM = None
         self.RM = None
+        self.dpo_ckpt = None
 
     ###################
     # basic functions #
     ###################
 
     def from_text_to_token(self, text):
-        out = self.tokenizer(text, return_tensors="pt", padding=True)
+        out = self.tokenizer(text, return_tensors='pt', padding=True)
         tokens, mask = out.input_ids.to(self.LLM.device), out.attention_mask.to(self.LLM.device)
         return tokens, mask
 
@@ -45,20 +46,20 @@ class BaseRewardSampling:
     def from_embedding_to_token(self, embedding, model):
         weights = model.model.embed_tokens.weight.data
 
-        assert len(weights.shape) == 2, "Invalid weight dimensions!"
-        assert len(embedding.shape) == 3, "Invalid embedding dimensions!"
+        assert len(weights.shape) == 2, 'Invalid weight dimensions!'
+        assert len(embedding.shape) == 3, 'Invalid embedding dimensions!'
 
         embedding = embedding.reshape(*embedding.shape[:2], 1, embedding.shape[-1])
         return torch.argmin(torch.norm(weights - embedding, dim=-1), dim=-1)
 
     def from_embedding_to_logit(self, embedding, mask=None, cache=None):
         out = self.LLM(
-            input_ids=None,
-            attention_mask=mask,
-            past_key_values=cache,
-            inputs_embeds=embedding,
-            use_cache=(cache is not None),
-            num_logits_to_keep=1,
+            input_ids = None,
+            attention_mask = mask,
+            past_key_values = cache,
+            inputs_embeds = embedding,
+            use_cache = (cache is not None),
+            num_logits_to_keep = 1,
         )
         logits, cache = out.logits[:, -1], out.past_key_values
         del out
@@ -66,11 +67,11 @@ class BaseRewardSampling:
 
     def from_embedding_to_reward(self, embedding, mask=None, cache=None):
         out = self.RM(
-            input_ids=None,
-            attention_mask=mask,
-            past_key_values=cache,
-            inputs_embeds=embedding,
-            use_cache=(cache is not None),
+            input_ids = None,
+            attention_mask = mask,
+            past_key_values = cache,
+            inputs_embeds = embedding,
+            use_cache = (cache is not None),
         )
         reward, cache = out.logits.flatten(), out.past_key_values
         del out
@@ -78,11 +79,11 @@ class BaseRewardSampling:
 
     def from_token_to_logit(self, token, mask=None, cache=None):
         out = self.LLM(
-            input_ids=token,
-            attention_mask=mask,
-            past_key_values=cache,
-            use_cache=(cache is not None),
-            num_logits_to_keep=1,
+            input_ids = token,
+            attention_mask = mask,
+            past_key_values = cache,
+            use_cache = (cache is not None),
+            num_logits_to_keep = 1,
         )
         logits, cache = out.logits[:, -1], out.past_key_values
         del out
@@ -90,10 +91,10 @@ class BaseRewardSampling:
 
     def from_token_to_reward(self, token, mask=None, cache=None):
         out = self.RM(
-            input_ids=token,
-            attention_mask=mask,
-            past_key_values=cache,
-            use_cache=(cache is not None),
+            input_ids = token,
+            attention_mask = mask,
+            past_key_values = cache,
+            use_cache = (cache is not None),
         )
         reward, cache = out.logits.flatten(), out.past_key_values
         del out
@@ -120,19 +121,59 @@ class BaseRewardSampling:
 
     def from_embedding_to_full_logit(self, embedding, mask=None, cache=None):
         out = self.LLM(
-            input_ids=None,
-            attention_mask=mask,
-            past_key_values=cache,
-            inputs_embeds=embedding,
-            use_cache=(cache is not None),
+            input_ids = None,
+            attention_mask = mask,
+            past_key_values = cache,
+            inputs_embeds = embedding,
+            use_cache = (cache is not None),
         )
         return out.logits, out.past_key_values
 
     def from_token_to_full_logit(self, token, mask=None, cache=None):
         out = self.LLM(
-            input_ids=token,
-            attention_mask=mask,
-            past_key_values=cache,
-            use_cache=(cache is not None),
+            input_ids = token,
+            attention_mask = mask,
+            past_key_values = cache,
+            use_cache = (cache is not None),
         )
         return out.logits, out.past_key_values
+
+    # RAIN (https://arxiv.org/abs/2309.07124)
+    def from_token_to_self_reward(self, token, mask=None, cache=None):
+        out = self.RM(
+            input_ids = token,
+            attention_mask = mask,
+            past_key_values = cache,
+            use_cache = (cache is not None),
+        )
+        reward, cache = out.logits.flatten(), out.past_key_values
+        del out
+        return reward, cache
+
+    # TreeBoN (https://arxiv.org/abs/2410.16033)
+    def from_token_to_weighted_implicit_reward(self, token, mask=None, cache=None, prompt_len:int=0):
+        out = self.LLM(
+            input_ids = token,
+            attention_mask = mask,
+            past_key_values = cache,
+            use_cache = (cache is not None),
+        )
+        dpo_out = self.dpo_ckpt(
+            input_ids = token,
+            attention_mask = mask,
+            past_key_values = cache,
+            use_cache = (cache is not None),
+        )
+
+        log_prob = F.log_softmax(out.logits, dim=-1)
+        dpo_log_prob = F.log_softmax(dpo_out.logits, dim=-1)
+
+        log_prob = log_prob.gather(-1, token.unsqueeze(-1)).squeeze(-1)[:, prompt_len:]
+        dpo_log_prob = dpo_log_prob.gather(-1, token.unsqueeze(-1)).squeeze(-1)[:, prompt_len:]
+
+        w = torch.tensor([[i for i in range(1, log_prob.shape[-1] + 1)]], device=log_prob.device, dtype=log_prob.dtype)
+        w = torch.reciprocal(w)
+
+        reward = torch.sum(w * (dpo_log_prob - log_prob))
+
+        return reward, out.past_key_values

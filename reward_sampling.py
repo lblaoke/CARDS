@@ -11,47 +11,50 @@ from tools import uncertainty
 
 class RewardSampling(BaseRewardSampling):
     def __init__(
-            self                    ,
-            llm_dir     : str       ,
-            rm_dir      : str=None  ,
-            cache_dir   : str=None  ,
-            access_token: str=None  ,
-
-            seed        : int=1     ,
-            fp_bit      : int=16    ,
-            device_map  : str='auto'
+            self,
+            llm_dir: str,
+            rm_dir: str = None,
+            dpo_dir: str = None,
+            cache_dir: str = None,
+            access_token: str = None,
+            seed: int = 1,
         ):
         super(RewardSampling, self).__init__(seed=seed)
 
-        assert fp_bit in {4, 8, 16, 32}, 'fp_bit must be one of {4, 8, 16, 32}!'
-
-        print('==> Loading tokenizer...')
+        print('\n==> Loading Tokenizer...')
         self.tokenizer = AutoTokenizer.from_pretrained(llm_dir, token=access_token, cache_dir=cache_dir)
 
-        print('==> Loading LLM...')
+        print('\n==> Loading LLM...')
         self.LLM = AutoModelForCausalLM.from_pretrained(
-            llm_dir                                                                     ,
-            cache_dir           = cache_dir                                             ,
-            token               = access_token                                          ,
-            torch_dtype         = torch.bfloat16 if (fp_bit == 16) else torch.float32   ,
-            load_in_8bit        = (fp_bit == 8)                                         ,
-            load_in_4bit        = (fp_bit == 4)                                         ,
-            device_map          = device_map                                            ,
-            attn_implementation = 'flash_attention_2'
+            llm_dir,
+            cache_dir = cache_dir,
+            token = access_token,
+            torch_dtype = torch.bfloat16,
+            device_map = 'auto',
+            attn_implementation = 'flash_attention_2',
         )
 
         if rm_dir is not None:
-            print('==> Loading RM...')
+            print('\n==> Loading RM...')
             self.RM = AutoModelForSequenceClassification.from_pretrained(
-                rm_dir                                                                      ,
-                cache_dir           = cache_dir                                             ,
-                token               = access_token                                          ,
-                num_labels          = 1                                                     ,
-                torch_dtype         = torch.bfloat16 if (fp_bit == 16) else torch.float32   ,
-                load_in_8bit        = (fp_bit == 8)                                         ,
-                load_in_4bit        = (fp_bit == 4)                                         ,
-                device_map          = device_map                                            ,
-                attn_implementation = 'flash_attention_2'
+                rm_dir,
+                cache_dir = cache_dir,
+                token = access_token,
+                num_labels = 1,
+                torch_dtype = torch.bfloat16,
+                device_map = 'auto',
+                attn_implementation = 'flash_attention_2',
+            )
+        
+        if dpo_dir is not None:
+            print('\n==> Loading DPO Checkpoint...')
+            self.dpo_ckpt = AutoModelForCausalLM.from_pretrained(
+                dpo_dir,
+                cache_dir = cache_dir,
+                token = access_token,
+                torch_dtype = torch.bfloat16,
+                device_map = 'auto',
+                attn_implementation = 'flash_attention_2',
             )
 
         if self.tokenizer.pad_token is None:
@@ -84,7 +87,7 @@ class RewardSampling(BaseRewardSampling):
 
     # ARGS: Alignment as Reward-Guided Search
     @torch.no_grad()
-    def token_bon_generate(self, prompt, args_weight:float=1.5, topk:int=20, max_new_token:int=128):
+    def token_bon_generate(self, prompt, args_weight:float=1.5, topk:int=40, max_new_token:int=128):
         tokens, mask = self.from_text_to_token(prompt)
         num_llm_call, num_rm_call = 0, 0
         llm_cache, rm_cache = None, None
@@ -239,7 +242,7 @@ class RewardSampling(BaseRewardSampling):
                 best_candidate, best_candidate_mask, best_reward = candidate.clone(), candidate_mask.clone(), reward
 
             # accept/reject the candidate
-            if num_regeneration >= 200:
+            if num_regeneration >= 20:
                 del tokens, mask, candidate, candidate_mask
                 best_reward = -1e34
                 tokens, mask = best_candidate, best_candidate_mask
@@ -255,18 +258,107 @@ class RewardSampling(BaseRewardSampling):
 
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
 
+    # Fixed-length segment rejection sampling
+    @torch.no_grad()
+    def seg_fix_rs_generate(
+        self,
+        prompt,
+        method:str = 'treebon',
+        reward_threshold:float = 8.5,
+        alpha:float = 0.5,
+        beta:float = 0.7,
+        topk:int = 40,
+        max_new_token:int = 128,
+    ):
+        tokens, mask = self.from_text_to_token(prompt)
+        len_prompt = tokens.shape[1]
+        best_candidate, best_candidate_mask, best_reward = None, None, -1e34
+        num_regeneration, num_llm_call, num_rm_call = 0, 0, 0
+        llm_cache, rm_cache = None, None
+
+        if method == 'treebon':
+            reward0, rm_cache = self.from_token_to_weighted_implicit_reward(tokens, mask, rm_cache)
+        elif method == 'rain':
+            reward0, rm_cache = self.from_token_to_self_reward(tokens, mask, rm_cache)
+        else:
+            assert False, 'Invalid method!'
+        reward0 = (1 - alpha) * reward0.mean().item() + alpha * reward_threshold
+
+        def accept_check(reward, candidate):
+            threshold = reward0 + (candidate.shape[1] - len_prompt) * (reward_threshold - reward0) / max_new_token
+            threshold = min(threshold, reward_threshold)
+
+            return random.uniform(0, 1) < min(1., exp((reward - threshold) / beta))
+
+        if method == 'treebon':
+            seg_len = 32
+        elif method == 'rain':
+            seg_len = 10
+        else:
+            assert False, 'Invalid method!'
+
+        while tokens.shape[1] - len_prompt < max_new_token:
+
+            # sample a new candidate
+            candidate = tokens.clone()
+            candidate_mask = mask.clone()
+
+            while True:
+                logits, llm_cache = self.from_token_to_logit(candidate, candidate_mask, llm_cache)
+                num_llm_call += len(tokens)
+                
+                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
+                candidate = torch.cat([candidate, selected_token], dim=-1)
+                candidate_mask = torch.cat([candidate_mask, torch.ones_like(selected_token)], dim=-1)
+
+                if candidate.shape[1] - tokens.shape[1] == 32:
+                    del logits
+                    break
+
+            # evaluate the candidate
+            if method == 'treebon':
+                reward, rm_cache = self.from_token_to_weighted_implicit_reward(candidate, candidate_mask, rm_cache)
+                num_rm_call += 2 * len(tokens)
+            elif method == 'rain':
+                reward, rm_cache = self.from_token_to_self_reward(candidate, candidate_mask, rm_cache)
+                num_rm_call += len(tokens)
+            else:
+                assert False, 'Invalid method!'
+
+            reward = reward.mean().item()
+
+            if reward > best_reward:
+                del best_candidate, best_candidate_mask
+                best_candidate, best_candidate_mask, best_reward = candidate.clone(), candidate_mask.clone(), reward
+
+            # accept/reject the candidate
+            if num_regeneration >= 20:
+                del tokens, mask, candidate, candidate_mask
+                best_reward = -1e34
+                tokens, mask = best_candidate, best_candidate_mask
+                num_regeneration = 0
+            elif accept_check(reward, candidate):
+                del tokens, mask, best_candidate, best_candidate_mask
+                best_candidate, best_candidate_mask, best_reward = None, None, -1e34
+                tokens, mask = candidate, candidate_mask
+                num_regeneration = 0
+            else:
+                del candidate, candidate_mask
+                num_regeneration += 1
+
+        return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
+
     # Sentence-level rejection sampling
     @torch.no_grad()
-    def seg_sentence_rs_generate(
+    def seg_punctuation_rs_generate(
         self                                ,
         prompt                              ,
-        option              : str   = 'soft',
+        entropy_threshold   : float = 1.0   ,
         reward_threshold    : float = 8.5   ,
         alpha               : float = 0.5   ,
         beta                : float = 0.7   ,
-        topk                : int   = 40   ,
+        topk                : int   = 40    ,
         max_new_token       : int   = 128   ,
-        debug               : bool  = False
     ):
         tokens, mask = self.from_text_to_token(prompt)
         len_prompt = tokens.shape[1]
@@ -276,19 +368,14 @@ class RewardSampling(BaseRewardSampling):
 
         reward0, rm_cache = self.from_token_to_reward(tokens, mask, rm_cache)
         reward0 = (1 - alpha) * reward0.mean().item() + alpha * reward_threshold
-        if debug: print(f'{reward0=:.2f}')
+        # print(f'{reward0=:.2f}')
 
         def accept_check(reward, candidate):
             threshold = reward0 + (candidate.shape[1] - len_prompt) * (reward_threshold - reward0) / max_new_token
             threshold = min(threshold, reward_threshold)
-            if debug: print(f'{reward=:.2f}, {threshold=:.2f}')
+            # print(f'{reward=:.2f}, {threshold=:.2f}')
 
-            if option == 'hard':
-                return reward >= threshold
-            elif option == 'soft':
-                return random.uniform(0, 1) < min(1., exp((reward - threshold) / beta))
-            else:
-                assert False, 'Invalid reward sampling option!'
+            return random.uniform(0, 1) < min(1., exp((reward - threshold) / beta))
 
         while tokens.shape[1] - len_prompt < max_new_token:
 
@@ -304,13 +391,18 @@ class RewardSampling(BaseRewardSampling):
                 candidate = torch.cat([candidate, selected_token], dim=-1)
                 candidate_mask = torch.cat([candidate_mask, torch.ones_like(selected_token)], dim=-1)
 
-                if debug: print(f'{selected_token.shape=}')
+                # print(f'{selected_token.shape=}')
 
-                if candidate.shape[1] - tokens.shape[1] >= 4 and '.' in self.from_token_to_text(selected_token):
-                    del logits
-                    break
+                if candidate.shape[1] - tokens.shape[1] < 4: continue
+                if not any(c in {',', '.', ':', ';', '?', '!'} for c in self.from_token_to_text(selected_token)): continue
+                # print(f'{self.from_token_to_text(selected_token)=}')
+                # print(f'{uncertainty.entropy(logits).mean().item()=}')
+                if uncertainty.entropy(logits).mean().item() < entropy_threshold: continue
 
-            if debug: print(f'Segment length = {candidate.shape[1] - tokens.shape[1]}')
+                del logits
+                break
+
+            # print(f'Segment length = {candidate.shape[1] - tokens.shape[1]}')
 
             # evaluate the candidate
             reward, rm_cache = self.from_token_to_reward(candidate, candidate_mask, rm_cache)
@@ -335,7 +427,7 @@ class RewardSampling(BaseRewardSampling):
             else:
                 del candidate, candidate_mask
                 num_regeneration += 1
-                if debug: print(f'Rejected {num_regeneration} times!')
+                # print(f'Rejected {num_regeneration} times!')
 
         return self.from_token_to_text(tokens), (reward, num_llm_call, num_rm_call)
 
@@ -546,5 +638,6 @@ class RewardSampling(BaseRewardSampling):
     @torch.no_grad()
     def rm_score(self, text):
         tokens, mask = self.from_text_to_token(text)
-        reward, _ = self.from_token_to_reward(tokens, mask)
+        # reward, _ = self.from_token_to_reward(tokens, mask)
+        reward, _ = self.from_token_to_weighted_implicit_reward(tokens, mask)
         return reward

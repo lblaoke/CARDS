@@ -8,7 +8,7 @@ def fast_QA_loader(data_dir:str, split:str, batch_size:int, head:int):
 
     # load data
     data = load_dataset(data_dir, split=split)
-    prompt, response = np.array(data["prompt"][:head]), np.array(data["response"][:head])
+    prompt, response = np.array(data['prompt'][:head]), np.array(data['response'][:head])
 
     # yield data
     idx = batch_size
@@ -18,22 +18,28 @@ def fast_QA_loader(data_dir:str, split:str, batch_size:int, head:int):
 
     yield prompt[idx - batch_size:].tolist(), response[idx - batch_size:].tolist()
 
-def QA_loader(data_dir:str, split:str, batch_size:int, head:int=None, max_len:int=1024):
+
+def QA_loader(data_dir:str, split:str, batch_size:int, head:int=None, max_len:int=1024, data_fmt:str='normal'):
 
     # load data
-    data = load_dataset(data_dir, split=split)
+    if data_fmt == 'alpaca_eval':
+        data = load_dataset('json', data_files=data_dir)['train']
+        question_field, answer_field = 'instruction', 'output'
+    else:
+        data = load_dataset(data_dir, split=split)
+        question_field, answer_field = 'prompt', 'response'
 
-    len_prompt = [len(p) for p in data["prompt"]]
-    len_response = [len(r) for r in data["response"]]
-    assert len(len_prompt) == len(len_response), "Prompts and responses not aligned!"
+    len_prompt = [len(p) for p in data[question_field]]
+    len_response = [len(r) for r in data[answer_field]]
+    assert len(len_prompt) == len(len_response), 'Prompts and responses not aligned!'
 
     # remove long prompts
     len_prompt_cleaned, prompt, response = [], [], []
     for i in range(len(len_prompt)):
         if len_prompt[i] <= max_len and len_response[i] <= max_len:
             len_prompt_cleaned.append(len_prompt[i])
-            prompt.append(data["prompt"][i])
-            response.append(data["response"][i])
+            prompt.append(data[question_field][i])
+            response.append(data[answer_field][i])
         if head is not None and len(prompt) >= head:
             break
     
@@ -52,22 +58,23 @@ def QA_loader(data_dir:str, split:str, batch_size:int, head:int=None, max_len:in
     sorted_idx = prompt_idx[idx - batch_size:]
     yield prompt[sorted_idx].tolist(), response[sorted_idx].tolist()
 
+
 def HH_loader(data_dir:str, split:str, batch_size:int=1, head:int=None, max_len:int=1024):
 
     # load data
     data = load_dataset(data_dir, split=split)
 
-    len_prompt = [len(p) for p in data["prompt"]]
-    len_chosen = [len(c) for c in data["chosen"]]
-    len_rejected = [len(r) for r in data["rejected"]]
+    len_prompt = [len(p) for p in data['prompt']]
+    len_chosen = [len(c) for c in data['chosen']]
+    len_rejected = [len(r) for r in data['rejected']]
 
     # remove long prompts
     prompt, chosen, rejected = [], [], []
     for i in range(len(len_prompt)):
         if len_prompt[i] <= max_len and len_chosen[i] <= max_len and len_rejected[i] <= max_len:
-            prompt.append(data["prompt"][i])
-            chosen.append(data["chosen"][i])
-            rejected.append(data["rejected"][i])
+            prompt.append(data['prompt'][i])
+            chosen.append(data['chosen'][i])
+            rejected.append(data['rejected'][i])
         if head is not None and len(prompt) >= head:
             break
     
@@ -81,19 +88,20 @@ def HH_loader(data_dir:str, split:str, batch_size:int=1, head:int=None, max_len:
 
     yield prompt[idx - batch_size:].tolist(), chosen[idx - batch_size:].tolist(), rejected[idx - batch_size:].tolist()
 
+
 def UF_loader(batch_size:int, head:int=None, max_len:int=1024):
     # load data
-    data = load_dataset("HuggingFaceH4/ultrafeedback_binarized", split="train_gen")
+    data = load_dataset('HuggingFaceH4/ultrafeedback_binarized', split='train_gen')
 
     # extract prompt and response
     prompt, response = [], []
     for item in data:
-        prompt.append(item["prompt"])
-        response.append(item["chosen"][1]["content"])  # The second item in "chosen" is the assistant"s response
+        prompt.append(item['prompt'])
+        response.append(item['chosen'][1]['content'])  # The second item in 'chosen' is the assistant's response
     
     len_prompt = [len(p) for p in prompt]
     len_response = [len(r) for r in response]
-    assert len(len_prompt) == len(len_response), "Prompts and responses not aligned!"
+    assert len(len_prompt) == len(len_response), 'Prompts and responses not aligned!'
     
     # remove long prompts and responses
     len_prompt_cleaned, prompt_cleaned, response_cleaned = [], [], []
