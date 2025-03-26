@@ -12,9 +12,9 @@ import json
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--method', type=str, default='cards')
+parser.add_argument('--method', type=str, default='sd')
 parser.add_argument('--save', type=str, default=None)
-parser.add_argument('--save_fmt', type=str, default='json')
+parser.add_argument('--save_fmt', type=str, default='jsonl')
 
 # Llama LLM choices
 # parser.add_argument('--llm_dir', type=str, default='argsearch/llama-7b-sft-float32')
@@ -24,28 +24,32 @@ parser.add_argument('--save_fmt', type=str, default='json')
 
 parser.add_argument('--llm_dir', type=str, default='meta-llama/Meta-Llama-3-8B-Instruct')
 parser.add_argument('--draft_dir', type=str, default='turboderp/Qwama-0.5B-Instruct')
+# parser.add_argument('--draft_dir', type=str, default='lblaoke/qwama-0.5b-skywork-pref-dpo-trl-v2')
 # parser.add_argument('--dpo_dir', type=str, default='allenai/llama-3-tulu-2-dpo-8b')
 
 # Llama RM choices
 # parser.add_argument('--rm_dir', type=str, default='argsearch/llama-7b-rm-float32')
-# parser.add_argument('--rm-dir', type=str, default='weqweasdas/hh_rlhf_rm_open_llama_3b')
-# parser.add_argument('--rm-dir', type=str, default='miulab/llama2-7b-ultrafeedback-rm')
+# parser.add_argument('--rm_dir', type=str, default='weqweasdas/hh_rlhf_rm_open_llama_3b')
+# parser.add_argument('--rm_dir', type=str, default='miulab/llama2-7b-ultrafeedback-rm')
 parser.add_argument('--rm_dir', type=str, default='Ray2333/GRM-Llama3-8B-rewardmodel-ft')
 
 # Mistral LLM choices
-# parser.add_argument('--llm-dir', type=str, default='mistralai/Mistral-7B-Instruct-v0.2')
-# parser.add_argument('--llm-dir', type=str, default='renyiyu/mistral-7b-instruct-v0.2-bnb-4bit-ppo-v0')
-# parser.add_argument('--llm-dir', type=str, default='AmberYifan/Mistral-7B-Instruct-v0.2-DPO')
+# parser.add_argument('--llm_dir', type=str, default='mistralai/Mistral-7B-Instruct-v0.2')
+# parser.add_argument('--llm_dir', type=str, default='renyiyu/mistral-7b-instruct-v0.2-bnb-4bit-ppo-v0')
+# parser.add_argument('--llm_dir', type=str, default='AmberYifan/Mistral-7B-Instruct-v0.2-DPO')
 
 # Mistral RM choices
-# parser.add_argument('--rm-dir', type=str, default='Ray2333/reward-model-Mistral-7B-instruct-Unified-Feedback')
-# parser.add_argument('--rm-dir', type=str, default='weqweasdas/RM-Mistral-7B')
+# parser.add_argument('--rm_dir', type=str, default='Ray2333/reward-model-Mistral-7B-instruct-Unified-Feedback')
+# parser.add_argument('--rm_dir', type=str, default='weqweasdas/RM-Mistral-7B')
 
 # Datasets
-# parser.add_argument('--data-dir', type=str, default='Dahoas/full-hh-rlhf')
-# parser.add_argument('--data-dir', type=str, default='nvidia/HelpSteer')
-# parser.add_argument('--data-dir', type=str, default='PKU-Alignment/BeaverTails')
-parser.add_argument('--data_dir', type=str, default='alpaca_eval.json')
+# parser.add_argument('--data_dir', type=str, default='Dahoas/full-hh-rlhf')
+# parser.add_argument('--data_dir', type=str, default='nvidia/HelpSteer')
+# parser.add_argument('--data_dir', type=str, default='PKU-Alignment/BeaverTails')
+# parser.add_argument('--data_dir', type=str, default='alpaca_eval.json')
+# parser.add_argument('--data_dir', type=str, default='walledai/AdvBench')
+# parser.add_argument('--data_dir', type=str, default='saferlhf.jsonl')
+parser.add_argument('--data_dir', type=str, default='Skywork/Skywork-Reward-Preference-80K-v0.1')
 
 # Common Options
 parser.add_argument('--seed', type=int, default=1)
@@ -54,10 +58,10 @@ parser.add_argument('--batch_size', type=int, default=1)
 parser.add_argument('--max_new_token', type=int, default=128)
 
 # CARDS Options
-parser.add_argument('--entropy', type=float, default=3.0)
-parser.add_argument('--reward', type=float, default=8.5) # for UF_loader: 10.0 (ARGS 9.32526); for Ray RM: 1.2 (ARGS 0.262109375).
+parser.add_argument('--entropy', type=float, default=2.0)
+parser.add_argument('--reward', type=float, default=9.0) # for UF_loader: 10.0 (ARGS 9.32526); for Ray RM: 1.2 (ARGS 0.262109375).
 parser.add_argument('--alpha', type=float, default=0.5)
-parser.add_argument('--beta', type=float, default=0.7)
+parser.add_argument('--beta', type=float, default=0.7) # 0.7 for CARDS, 0.8 for standard SD
 
 # GradRS Options
 parser.add_argument('--lr', type=float, default=0.1)
@@ -82,14 +86,24 @@ sampler = RewardSampling(**sampler_kwargs)
 
 # data = data_loader.QA_loader(args.data_dir, split='test', batch_size=args.batch_size, head=args.num_test_prompt)
 # data = data_loader.UF_loader(batch_size=args.batch_size, head=args.num_test_prompt)
-data = data_loader.QA_loader(args.data_dir, split=None, batch_size=args.batch_size, head=args.num_test_prompt, data_fmt='alpaca_eval')
+# data = data_loader.QA_loader(args.data_dir, split='train', batch_size=args.batch_size, head=args.num_test_prompt, data_fmt='advbench')
+data = data_loader.Pref_loader(args.data_dir, split='train', batch_size=args.batch_size, head=args.num_test_prompt, data_fmt='skywork_pref')
 
 num_samples, total_num_llm_call, total_num_rm_call = 0, 0, 0
 output = []
 
 with autocast(dtype=torch.bfloat16, enabled=True):
-    for prompt, _ in tqdm(data):
-        if args.method == 'grad_rs':
+    for prompt, response in tqdm(data):
+        print(prompt)
+        print(response)
+        if args.method == 'sd':
+            response, (num_llm_call, num_rm_call) = sampler.sd_generate(
+                prompt,
+                beta=args.beta,
+                max_new_token=args.max_new_token,
+            )
+
+        elif args.method == 'grad_rs':
             assert args.batch_size == 1, 'grad_rs does not support batch_size > 1'
             response, num_operation = sampler.grad_rs_generate(
                 prompt,

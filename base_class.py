@@ -7,7 +7,6 @@ class BaseRewardSampling:
     def __init__(self, seed):
         loading_utils._gpu_init(seed)
 
-        self.device = None
         self.use_cache = False # KV cache is disabled by default, due to the repeating issue in the output
 
         self.tokenizer = None
@@ -22,7 +21,10 @@ class BaseRewardSampling:
 
     def from_text_to_token(self, text):
         out = self.tokenizer(text, return_tensors='pt', padding=True)
-        tokens, mask = out.input_ids.to(self.device), out.attention_mask.to(self.device)
+        if self.LLM is not None:
+            tokens, mask = out.input_ids.to(self.LLM.device), out.attention_mask.to(self.LLM.device)
+        else:
+            tokens, mask = out.input_ids.to(self.RM.device), out.attention_mask.to(self.RM.device)
         return tokens, mask
 
     def from_token_to_text(self, token):

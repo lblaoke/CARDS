@@ -25,6 +25,9 @@ def QA_loader(data_dir:str, split:str, batch_size:int, head:int=None, max_len:in
     if data_fmt == 'alpaca_eval':
         data = load_dataset('json', data_files=data_dir)['train']
         question_field, answer_field = 'instruction', 'output'
+    elif data_fmt == 'advbench':
+        data = load_dataset(data_dir, split=split)
+        question_field, answer_field = 'prompt', 'target'
     else:
         data = load_dataset(data_dir, split=split)
         question_field, answer_field = 'prompt', 'response'
@@ -46,6 +49,7 @@ def QA_loader(data_dir:str, split:str, batch_size:int, head:int=None, max_len:in
     prompt, response = np.array(prompt), np.array(response)
 
     # sort by prompt length
+    # TODO: longer prompt first
     prompt_idx = np.argsort(len_prompt_cleaned)
 
     # yield data
@@ -58,6 +62,54 @@ def QA_loader(data_dir:str, split:str, batch_size:int, head:int=None, max_len:in
     sorted_idx = prompt_idx[idx - batch_size:]
     yield prompt[sorted_idx].tolist(), response[sorted_idx].tolist()
 
+def Pref_loader(data_dir:str, split:str, batch_size:int, head:int=None, max_len:int=1024, data_fmt:str='saferlhf'):
+    # TODO: ['role' == 'user'] does not work. It is equivalent to False / 0.
+    # prompt = [row['content'] for row in data if row.get('role') == 'user'][0]
+    # return a dict with keys 'prompt'
+    """
+    Aligned row:
+    row = dict(
+        prompt = ...
+    )
+    """
+
+    # load data
+    if data_fmt == 'saferlhf':
+        data = load_dataset('json', data_files=data_dir)['train']
+        chosen_field, rejected_field = 'real', 'generated'
+    elif data_fmt == 'skywork_pref':
+        data = load_dataset(data_dir, split=split)
+        chosen_field, rejected_field = 'chosen', 'rejected'
+
+    len_prompt = [len(p[chosen_field]['role' == 'user']['content']) for p in data]
+    len_response = [len(r[chosen_field]['role' == 'assistant']['content']) for r in data]
+    assert len(len_prompt) == len(len_response), 'Prompts and responses not aligned!'
+
+    # remove long prompts
+    len_prompt_cleaned, prompt, response = [], [], []
+    for i in range(len(len_prompt)):
+        if len_prompt[i] <= max_len and len_response[i] <= max_len:
+            len_prompt_cleaned.append(len_prompt[i])
+            prompt.append(data[i][chosen_field]['role' == 'user']['content'])
+            response.append(data[i][chosen_field]['role' == 'assistant']['content'])
+        if head is not None and len(prompt) >= head:
+            break
+    
+    prompt, response = np.array(prompt), np.array(response)
+
+    # sort by prompt length
+    # TODO: longer prompt first
+    prompt_idx = np.argsort(len_prompt_cleaned)
+
+    # yield data
+    idx = batch_size
+    while idx < len(prompt_idx):
+        sorted_idx = prompt_idx[idx - batch_size:idx]
+        yield prompt[sorted_idx].tolist(), response[sorted_idx].tolist()
+        idx += batch_size
+
+    sorted_idx = prompt_idx[idx - batch_size:]
+    yield prompt[sorted_idx].tolist(), response[sorted_idx].tolist()
 
 def HH_loader(data_dir:str, split:str, batch_size:int=1, head:int=None, max_len:int=1024):
 

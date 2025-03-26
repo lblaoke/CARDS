@@ -70,8 +70,6 @@ class RewardSampling(BaseRewardSampling):
                 self.draft.resize_token_embeddings(len(self.tokenizer))
                 self.draft.eval()
 
-        self.device = self.LLM.device
-
     def unload_all(self):
         del self.LLM, self.dpo_ckpt, self.draft
         self.LLM, self.dpo_ckpt, self.draft = None, None, None
@@ -128,20 +126,27 @@ class RewardSampling(BaseRewardSampling):
             # sample a new draft candidate
             candidate = tokens.clone()
             candidate_mask = mask.clone()
-            draft_prob = []
 
             for _ in range(max_draft_token):
-                logits, draft_cache = self.from_token_to_draft_logit(candidate, candidate_mask, draft_cache)
+                logits, draft_cache = self.from_token_to_logit(candidate, candidate_mask, model=self.draft, cache=draft_cache)
 
-                selected_token, prob = self.from_logit_to_token(logits, top_k=topk, temperature=beta, return_prob=True)
+                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
                 candidate = torch.cat([candidate, selected_token], dim=-1)
                 candidate_mask = torch.cat([candidate_mask, torch.ones_like(selected_token)], dim=-1)
-                draft_prob.append(prob.detach().cpu())
-
-            draft_prob = torch.cat(draft_prob, dim=-1)
 
             # verify the candidate
-            logits, llm_cache = self.from_token_to_full_logit(
+            logits, draft_cache = self.from_token_to_logit(
+                token = candidate,
+                mask = candidate_mask,
+                model = self.draft,
+                logits_to_keep = max_draft_token + 1,
+                cache = draft_cache,
+            )
+
+            draft_dist = F.softmax(logits / beta, dim=-1)
+            draft_prob = draft_dist[:, :-1, :].gather(-1, candidate[:, -max_draft_token:].unsqueeze(-1)).squeeze(-1).detach().cpu()
+
+            logits, llm_cache = self.from_token_to_logit(
                 token = candidate,
                 mask = candidate_mask,
                 logits_to_keep = max_draft_token + 1,
@@ -162,7 +167,7 @@ class RewardSampling(BaseRewardSampling):
 
             # merge the accepted tokens
             if accept_pos < 0:
-                selected_token = self.from_logit_to_token(target_dist[:, 0, :], top_k=topk, temperature=beta)
+                selected_token = self.from_logit_to_token(target_dist[:, 0, :], temperature=beta)
                 tokens = torch.cat([tokens, selected_token], dim=-1)
                 mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
             elif accept_pos == max_draft_token - 1:
@@ -171,12 +176,34 @@ class RewardSampling(BaseRewardSampling):
                 tokens = candidate[:, :-(max_draft_token - accept_pos -1)]
                 mask = candidate_mask[:, :-(max_draft_token - accept_pos - 1)]
 
-            print(f'{accept_pos=}')
-            print(self.from_token_to_text(tokens))
+        return self.from_token_to_text(tokens), (num_llm_call, 0.)
 
-        reward, _ = self.from_token_to_reward(tokens, mask)
-        reward = reward.mean().item()
-        return self.from_token_to_text(tokens), (reward, num_llm_call, 0.)
+    # Item-level Best-of-N
+    @torch.no_grad()
+    def bon_generate(self, prompt, n:int=10, topk:int=40, beta:float=1.0, max_new_token:int=128):
+        self.load_rm()
+        num_llm_call, num_rm_call = 0, 0
+        llm_cache = None
+        tokens_best, reward_best = None, -1e34
+
+        for _ in range(n):
+            tokens, mask = self.from_text_to_token(prompt)
+
+            for _ in range(max_new_token):
+                logits, llm_cache = self.from_token_to_logit(tokens, mask, llm_cache)
+                num_llm_call += len(tokens)
+                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
+
+                tokens = torch.cat([tokens, selected_token], dim=-1)
+                mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
+
+            reward, _ = self.from_token_to_reward(tokens, mask)
+            num_rm_call += len(tokens)
+            reward = reward.mean().item()
+            if reward > reward_best:
+                tokens_best, reward_best = tokens.clone(), reward
+            
+        return self.from_token_to_text(tokens_best), (num_llm_call, num_rm_call)
 
     # ARGS: Alignment as Reward-Guided Search
     @torch.no_grad()
@@ -532,33 +559,6 @@ class RewardSampling(BaseRewardSampling):
                 # print(f'Rejected {num_regeneration} times!')
 
         return self.from_token_to_text(tokens), (num_llm_call, num_rm_call)
-
-    # Item-level Best-of-N
-    @torch.no_grad()
-    def bon_generate(self, prompt, n:int=10, topk:int=40, beta:float=1.0, max_new_token:int=128):
-        self.load_rm()
-        num_llm_call, num_rm_call = 0, 0
-        llm_cache = None
-        tokens_best, reward_best = None, -1e34
-
-        for _ in range(n):
-            tokens, mask = self.from_text_to_token(prompt)
-
-            for _ in range(max_new_token):
-                logits, llm_cache = self.from_token_to_logit(tokens, mask, llm_cache)
-                num_llm_call += len(tokens)
-                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
-
-                tokens = torch.cat([tokens, selected_token], dim=-1)
-                mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
-
-            reward, _ = self.from_token_to_reward(tokens, mask)
-            num_rm_call += len(tokens)
-            reward = reward.mean().item()
-            if reward > reward_best:
-                tokens_best, reward_best = tokens.clone(), reward
-            
-        return self.from_token_to_text(tokens_best), (num_llm_call, num_rm_call)
 
     # BOLT: Fast Energy-based Controlled Text Generation with Tunable Biases
     def bolt_generate(self, prompt, reward_threshold:float=8.5, topk:int=40, beta:float=0.7, max_new_token:int=128):
