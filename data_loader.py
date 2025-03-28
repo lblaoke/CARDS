@@ -79,10 +79,10 @@ def Pref_loader(data_dir:str, split:str, batch_size:int, head:int=None, max_len:
         chosen_field, rejected_field = 'real', 'generated'
     elif data_fmt == 'skywork_pref':
         data = load_dataset(data_dir, split=split)
-        chosen_field, rejected_field = 'chosen', 'rejected'
+        chosen_field, rejected_field = 'rejected', 'rejected'
 
-    len_prompt = [len(p[chosen_field]['role' == 'user']['content']) for p in data]
-    len_response = [len(r[chosen_field]['role' == 'assistant']['content']) for r in data]
+    len_prompt = [len(p[chosen_field][0]['content']) for p in data]
+    len_response = [len(r[chosen_field][1]['content']) for r in data]
     assert len(len_prompt) == len(len_response), 'Prompts and responses not aligned!'
 
     # remove long prompts
@@ -90,8 +90,8 @@ def Pref_loader(data_dir:str, split:str, batch_size:int, head:int=None, max_len:
     for i in range(len(len_prompt)):
         if len_prompt[i] <= max_len and len_response[i] <= max_len:
             len_prompt_cleaned.append(len_prompt[i])
-            prompt.append(data[i][chosen_field]['role' == 'user']['content'])
-            response.append(data[i][chosen_field]['role' == 'assistant']['content'])
+            prompt.append(data[i][chosen_field][0]['content'])
+            response.append(data[i][chosen_field][1]['content'])
         if head is not None and len(prompt) >= head:
             break
     

@@ -84,6 +84,14 @@ class RewardSampling(BaseRewardSampling):
             self.RM.eval()
 
     @torch.no_grad()
+    def get_likelihood(self, text):
+        token, mask = self.from_text_to_token(text)
+        logits, _ = self.from_token_to_full_logit(token, mask)
+        dist = F.softmax(logits, dim=-1)
+        prob = dist[:, :-1, :].gather(-1, token[:, 1:].unsqueeze(-1)).squeeze(-1).detach()
+        return prob.mean().item()
+
+    @torch.no_grad()
     def get_reward(self, text):
         token, mask = self.from_text_to_token(text)
         reward, _ = self.from_token_to_reward(token, mask)
