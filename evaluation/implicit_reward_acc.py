@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
 # parser.add_argument('--llm_dir', type=str, default='lblaoke/qwama-0.5b-skywork-pref-dpo-trl-v2')
-parser.add_argument('--llm_dir', type=str, default='turboderp/Qwama-0.5B-Instruct')
+parser.add_argument('--llm_dir', type=str, default='lblaoke/qwama-0.5b-skywork-pref-sft-chosen-dpo-trl-v3')
 parser.add_argument('--rm_dir', type=str, default='Ray2333/GRM-Llama3-8B-rewardmodel-ft')
 
 args = parser.parse_args()
@@ -30,9 +30,9 @@ with autocast(dtype=torch.bfloat16):
     likelihood = []
 
     for prompt, response in tqdm(data):
-        token, mask = rs.from_text_to_token('User:\n' + prompt[0] + '\n\nAssistant:\n' + response[0])
-        # response, _ = rs.generate('User:\n' + prompt[0] + '\n\nAssistant:\n', max_new_token=128)
-        # token, mask = rs.from_text_to_token(response)
+        # token, mask = rs.from_text_to_token('### User: ' + prompt[0] + '\n\n### Assistant: ' + response[0])
+        response, _ = rs.generate('### User: ' + prompt[0] + '\n\n### Assistant: ', max_new_token=128)
+        token, mask = rs.from_text_to_token(response)
 
         logits, _ = rs.from_token_to_full_logit(token, mask)
         dist = F.softmax(logits, dim=-1)
