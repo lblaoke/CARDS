@@ -21,21 +21,23 @@ def parse_json(row):
 def PRCR_loader(args, tokenizer, head:int=None, max_length:int=1024):
 
     # load
+    dataset_name = args.data_dir.lower()
+
     # alpaca_eval.json
-    if 'alpaca_eval' in args.data_dir.lower():
+    if 'alpaca_eval' in dataset_name:
         data = load_dataset('json', data_files=args.data_dir, split='train')
         data = data.rename_column('instruction', 'prompt')
         data = data.rename_column('output', 'response')
         parse_func = parse_plain
 
     # walledai/AdvBench
-    elif 'advbench' in args.data_dir.lower():
+    elif 'advbench' in dataset_name:
         data = load_dataset(args.data_dir, split='train')
         data = data.rename_column('target', 'response')
         parse_func = parse_plain
 
     # saferlhf.jsonl
-    elif 'saferlhf' in args.data_dir.lower():
+    elif 'saferlhf' in dataset_name:
         data = load_dataset('json', data_files=args.data_dir, split='train')
         data = data.rename_column('real', 'chosen')
         data = data.rename_column('generated', 'rejected')
@@ -44,13 +46,13 @@ def PRCR_loader(args, tokenizer, head:int=None, max_length:int=1024):
 
     # Skywork/Skywork-Reward-Preference-80K-v0.1
     # pharaouk/ultrafeedback-binarized-preferences-cleaned
-    elif 'skywork' in args.data_dir.lower() or 'ultrafeedback' in args.data_dir.lower():
+    elif 'skywork' in dataset_name or 'ultrafeedback' in dataset_name:
         data = load_dataset(args.data_dir, split='train')
         data = data.map(extract_prompt)
         parse_func = parse_json
 
     # Dahoas/full-hh-rlhf
-    elif 'hh-rlhf' in args.data_dir.lower():
+    elif 'hh-rlhf' in dataset_name:
         data = load_dataset(args.data_dir, split='test')
         parse_func = parse_plain
 
@@ -67,7 +69,7 @@ def PRCR_loader(args, tokenizer, head:int=None, max_length:int=1024):
 
     # tokenize
     def tokenize_func(row):
-        out = tokenizer(row['prompt'], padding=True, return_tensors='pt')
+        out = tokenizer(row['prompt'], padding=True)
         return {
             'input_ids': out.input_ids,
             'attention_mask': out.attention_mask,

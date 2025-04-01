@@ -1,0 +1,15 @@
+method: vanilla
+save: alpaca_eval_llama-3-8b_vanilla
+save_fmt: json
+
+data_dir: ./alpaca_eval.json
+max_length: 1024
+
+llm_dir: meta-llama/Meta-Llama-3-8B-Instruct
+rm_dir: Ray2333/GRM-Llama3-8B-rewardmodel-ft
+
+seed: 1
+batch_size: 1
+max_new_token: 128
+top_k: 1
+temperature: 0.8

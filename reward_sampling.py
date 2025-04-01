@@ -85,29 +85,34 @@ class RewardSampling(BaseRewardSampling):
 
     @torch.no_grad()
     def get_likelihood(self, text):
-        token, mask = self.from_text_to_token(text)
-        logits, _ = self.from_token_to_full_logit(token, mask)
+        tokens, mask = self.from_text_to_token(text)
+        tokens, mask = torch.tensor(tokens, device=self.RM.device), torch.tensor(mask, device=self.RM.device)
+        logits, _ = self.from_token_to_full_logit(tokens, mask)
         dist = F.softmax(logits, dim=-1)
-        prob = dist[:, :-1, :].gather(-1, token[:, 1:].unsqueeze(-1)).squeeze(-1).detach()
+        prob = dist[:, :-1, :].gather(-1, tokens[:, 1:].unsqueeze(-1)).squeeze(-1).detach()
         return prob.mean().item()
 
     @torch.no_grad()
     def get_reward(self, text):
-        token, mask = self.from_text_to_token(text)
-        reward, _ = self.from_token_to_reward(token, mask)
+        tokens, mask = self.from_text_to_token(text)
+        tokens, mask = torch.tensor(tokens, device=self.RM.device), torch.tensor(mask, device=self.RM.device)
+        reward, _ = self.from_token_to_reward(tokens, mask)
         return reward.mean().item()
 
     # Vanilla LLM
     @torch.no_grad()
-    def generate(self, prompt, max_new_token:int=128):
-        tokens, mask = self.from_text_to_token(prompt)
+    def generate(self, prompt=None, tokens=None, mask=None, top_k:int=1, beta:float=0.8, max_new_token:int=128):
+        if tokens is None or mask is None:
+            tokens, mask = self.from_text_to_token(prompt)
+        tokens, mask = torch.tensor(tokens, device=self.LLM.device), torch.tensor(mask, device=self.LLM.device)
+
         num_llm_call = 0
         llm_cache = None
 
         for _ in range(max_new_token):
             logits, llm_cache = self.from_token_to_logit(tokens, mask, llm_cache)
             num_llm_call += len(tokens)
-            selected_token = self.from_logit_to_token(logits)
+            selected_token = self.from_logit_to_token(logits, top_k=top_k, temperature=beta)
 
             tokens = torch.cat([tokens, selected_token], dim=-1)
             mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
