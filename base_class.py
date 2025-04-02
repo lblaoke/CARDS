@@ -68,6 +68,10 @@ class BaseRewardSampling:
         return reward, cache
 
     def from_token_to_logit(self, token, mask=None, model=None, logits_to_keep:int=1, cache=None):
+        if self.use_cache and cache is not None:
+            token = token[:, -1:]
+            if mask is not None:
+                mask = mask[:, -1:]
         kwargs = {
             'input_ids': token,
             'attention_mask': mask,

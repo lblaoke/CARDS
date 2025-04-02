@@ -110,7 +110,7 @@ class RewardSampling(BaseRewardSampling):
         llm_cache = None
 
         for _ in range(max_new_token):
-            logits, llm_cache = self.from_token_to_logit(tokens, mask, llm_cache)
+            logits, llm_cache = self.from_token_to_logit(token=tokens, mask=mask, cache=llm_cache)
             num_llm_call += len(tokens)
             selected_token = self.from_logit_to_token(logits, top_k=top_k, temperature=beta)
 
