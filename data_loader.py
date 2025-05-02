@@ -56,6 +56,11 @@ def PRCR_loader(args, tokenizer, head:int=None, max_length:int=1024):
         data = load_dataset(args.data_dir, split='test')
         parse_func = parse_plain
 
+    elif 'fineweb' in dataset_name:
+        data = load_dataset(args.data_dir, split='train').select(range(100000))
+        data = data.rename_column('text', 'prompt')
+        parse_func = parse_plain
+
     else:
         print('\nNOTE: By default, the dataset train split is loaded from HuggingFace, and the keys are assumed to be "prompt" and "response".\n')
         data = load_dataset(args.data_dir, split='train')
@@ -88,20 +93,22 @@ def PRCR_loader(args, tokenizer, head:int=None, max_length:int=1024):
 if __name__ == "__main__":
     import argparse
     from transformers import AutoTokenizer
+    from tqdm import tqdm
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='Dahoas/full-hh-rlhf')
-    parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--data_dir', type=str, default='EleutherAI/fineweb-edu-dedup-10b')
+    parser.add_argument('--batch_size', type=int, default=1)
     args = parser.parse_args()
 
-    tokenizer = AutoTokenizer.from_pretrained('lblaoke/qwama-0.5b-skywork-pref-dpo-trl-v2')
+    tokenizer = AutoTokenizer.from_pretrained('openai-community/gpt2')
+    tokenizer.add_special_tokens({'pad_token': '</s>'})
 
-    data = PRCR_loader(args, tokenizer, max_length=1024, head=100)
+    data = PRCR_loader(args, tokenizer, max_length=512)
     print(data)
-    print(data.features.keys())
-    for row in data:
-        print(len(row['prompt'][0]), len(row['input_ids'][0]))
-        print(row['prompt'][0])
-        print(row['chosen'][0])
-        print(row['input_ids'][0])
-        break
+    print(len(data))
+    length = 0
+
+    for row in tqdm(data):
+        length += len(row['input_ids'][0])
+    
+    print(length / len(data))

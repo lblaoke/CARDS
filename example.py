@@ -1,12 +1,12 @@
-from reward_sampling import RewardSampling
+from transformers import AutoTokenizer
 
-# rs = RewardSampling(access_token=None, llm_dir="meta-llama/Llama-3.1-8B-Instruct", rm_dir="Skywork/Skywork-Reward-Llama-3.1-8B-v0.2")
-# rs = RewardSampling(llm_dir="argsearch/llama-7b-sft-float32", rm_dir="argsearch/llama-7b-rm-float32")
-# rs = RewardSampling(llm_dir='argsearch/llama-7b-sft-float32', dpo_dir='AmberYifan/llama-7b-sft-DPO')
+t1 = AutoTokenizer.from_pretrained('meta-llama/Meta-Llama-3-8B-Instruct')
+t2 = AutoTokenizer.from_pretrained('turboderp/Qwama-0.5B-Instruct')
 
-# rs = RewardSampling(llm_dir='meta-llama/Meta-Llama-3-8B-Instruct', rm_dir='Ray2333/GRM-Llama3-8B-rewardmodel-ft', draft_dir='turboderp/Qwama-0.5B-Instruct')
-rs = RewardSampling(llm_dir='lblaoke/qwama-0.5b-skywork-pref-dpo-trl-v2', rm_dir='turboderp/Qwama-0.5B-RewardModel')
+tokens = t1('I don\'t know why I\'m so upset.').input_ids
+print(tokens)
 
-a, b = rs.from_text_to_token("Hello, how are you?")
-print(a, type(a))
-print(b, type(b))
+tokens = t2('I don\'t know why I\'m so upset.').input_ids
+print(tokens)
+
+print(t1.decode(tokens))

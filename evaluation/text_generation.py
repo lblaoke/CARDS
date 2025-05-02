@@ -106,7 +106,8 @@ with autocast(dtype=torch.bfloat16, enabled=True):
 
         if args.method == 'sd':
             response, (num_llm_call, num_rm_call) = sampler.sd_generate(
-                prompt,
+                tokens=tokens,
+                mask=mask,
                 beta=args.temperature,
                 max_new_token=args.max_new_token,
             )
@@ -170,7 +171,13 @@ with autocast(dtype=torch.bfloat16, enabled=True):
 
         elif args.method == 'bon':
             assert args.batch_size == 1, 'bon does not support batch_size > 1'
-            response, (num_llm_call, num_rm_call) = sampler.bon_generate(prompt, max_new_token=args.max_new_token)
+            response, (num_llm_call, num_rm_call) = sampler.bon_generate(
+                prompt=prompt,
+                n=args.bon_n,
+                top_k=args.top_k,
+                beta=args.temperature,
+                max_new_token=args.max_new_token,
+            )
 
         elif args.method == 'args':
             response, (num_llm_call, num_rm_call) = sampler.token_bon_generate(prompt, max_new_token=args.max_new_token)

@@ -42,7 +42,7 @@ class RewardSampling(BaseRewardSampling):
             self.rm_dir = rm_dir
             # print('\n==> Loading RM...')
             # self.RM = AutoModelForSequenceClassification.from_pretrained(rm_dir, num_labels = 1, **self.model_kwargs)
-        
+
         if dpo_dir is not None:
             print('\n==> Loading DPO Checkpoint...')
             self.dpo_ckpt = AutoModelForCausalLM.from_pretrained(dpo_dir, **self.model_kwargs)
@@ -80,7 +80,10 @@ class RewardSampling(BaseRewardSampling):
         if self.RM is None:
             print('\n==> Loading RM...')
             self.RM = AutoModelForSequenceClassification.from_pretrained(self.rm_dir, num_labels = 1, **self.model_kwargs)
-            self.RM.resize_token_embeddings(len(self.tokenizer))
+            self.RM.tokenizer = AutoTokenizer.from_pretrained(self.rm_dir, **self.model_kwargs)
+
+            self.RM.tokenizer.add_special_tokens({'pad_token': '</s>'})
+            self.RM.resize_token_embeddings(len(self.RM.tokenizer))
             self.RM.eval()
 
     @torch.no_grad()
@@ -94,7 +97,12 @@ class RewardSampling(BaseRewardSampling):
 
     @torch.no_grad()
     def get_reward(self, text):
-        tokens, mask = self.from_text_to_token(text)
+        if self.RM.tokenizer is None:
+            tokens, mask = self.from_text_to_token(text)
+        else:
+            out = self.RM.tokenizer(text, padding=True)
+            tokens, mask = out.input_ids, out.attention_mask
+
         tokens, mask = torch.tensor(tokens, device=self.RM.device), torch.tensor(mask, device=self.RM.device)
         reward, _ = self.from_token_to_reward(tokens, mask)
         return reward.mean().item()
@@ -123,13 +131,17 @@ class RewardSampling(BaseRewardSampling):
     @torch.no_grad()
     def sd_generate(
         self,
-        prompt,
+        prompt = None,
+        tokens = None,
+        mask = None,
         beta: float = 0.8,
         topk: int = 40,
         max_draft_token: int = 4,
         max_new_token: int = 128,
     ):
-        tokens, mask = self.from_text_to_token(prompt)
+        if tokens is None or mask is None:
+            tokens, mask = self.from_text_to_token(prompt)
+        tokens, mask = torch.tensor(tokens, device=self.LLM.device), torch.tensor(mask, device=self.LLM.device)
         batch_size, len_prompt = tokens.shape[0], tokens.shape[1]
         num_llm_call = 0
         llm_cache, draft_cache = None, None
@@ -180,9 +192,10 @@ class RewardSampling(BaseRewardSampling):
 
             # merge the accepted tokens
             if accept_pos < 0:
-                selected_token = self.from_logit_to_token(target_dist[:, 0, :], temperature=beta)
-                tokens = torch.cat([tokens, selected_token], dim=-1)
-                mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
+                # selected_token = self.from_logit_to_token(target_dist[:, 0, :], temperature=beta)
+                # tokens = torch.cat([tokens, selected_token], dim=-1)
+                # mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
+                pass
             elif accept_pos == max_draft_token - 1:
                 tokens, mask = candidate, candidate_mask
             else:
@@ -193,7 +206,7 @@ class RewardSampling(BaseRewardSampling):
 
     # Item-level Best-of-N
     @torch.no_grad()
-    def bon_generate(self, prompt, n:int=10, topk:int=40, beta:float=1.0, max_new_token:int=128):
+    def bon_generate(self, prompt, n:int=10, top_k:int=40, beta:float=1.0, max_new_token:int=128):
         self.load_rm()
         num_llm_call, num_rm_call = 0, 0
         llm_cache = None
@@ -201,16 +214,17 @@ class RewardSampling(BaseRewardSampling):
 
         for _ in range(n):
             tokens, mask = self.from_text_to_token(prompt)
+            tokens, mask = torch.tensor(tokens, device=self.LLM.device), torch.tensor(mask, device=self.LLM.device)
 
             for _ in range(max_new_token):
                 logits, llm_cache = self.from_token_to_logit(tokens, mask, llm_cache)
                 num_llm_call += len(tokens)
-                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
+                selected_token = self.from_logit_to_token(logits, top_k=top_k, temperature=beta)
 
                 tokens = torch.cat([tokens, selected_token], dim=-1)
                 mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
 
-            reward, _ = self.from_token_to_reward(tokens, mask)
+            reward, _ = self.from_text_to_reward(self.from_token_to_text(tokens))
             num_rm_call += len(tokens)
             reward = reward.mean().item()
             if reward > reward_best:

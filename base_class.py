@@ -102,6 +102,37 @@ class BaseRewardSampling:
         del out
         return reward, cache
 
+    def from_token_to_implicit_reward(self, token, mask=None, cache=None):
+        out = self.LLM(
+            input_ids = token,
+            attention_mask = mask,
+            past_key_values = cache,
+            use_cache = self.use_cache,
+        )
+
+        log_prob = F.log_softmax(out.logits, dim=-1)
+        log_prob = log_prob.gather(-1, token.unsqueeze(-1)).squeeze(-1)
+
+        return log_prob.sum(dim=-1), out.past_key_values
+
+    def from_text_to_reward(self, text, cache=None):
+        if self.RM.tokenizer is None:
+            tokens, mask = self.from_text_to_token(text)
+        else:
+            out = self.RM.tokenizer(text, padding=True)
+            tokens, mask = out.input_ids, out.attention_mask
+
+        tokens, mask = torch.tensor(tokens, device=self.RM.device), torch.tensor(mask, device=self.RM.device)
+        reward, cache = self.from_token_to_reward(tokens, mask, cache=cache)
+
+        return reward, cache
+
+        # tokens, mask = self.from_text_to_token(text)
+        # tokens, mask = torch.tensor(tokens, device=self.draft.device), torch.tensor(mask, device=self.draft.device)
+
+        # reward, cache = self.from_token_to_implicit_reward(tokens, mask, cache=cache)
+        # return reward, cache
+
     def from_logit_to_token(
         self,
         logit,
