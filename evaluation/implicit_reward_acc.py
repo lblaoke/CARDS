@@ -24,7 +24,6 @@ parser.add_argument('--batch_size', type=int, default=1)
 args = parser.parse_args()
 
 rs = RewardSampling(llm_dir=args.llm_dir, rm_dir=args.rm_dir)
-
 data = data_loader.PRCR_loader(args, rs.tokenizer, head=100, max_length=512)
 
 with autocast(dtype=torch.bfloat16):

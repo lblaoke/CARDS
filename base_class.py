@@ -110,10 +110,15 @@ class BaseRewardSampling:
             use_cache = self.use_cache,
         )
 
-        log_prob = F.log_softmax(out.logits, dim=-1)
-        log_prob = log_prob.gather(-1, token.unsqueeze(-1)).squeeze(-1)
+        logits = out.logits[:, :-1, :]
+        targets = token[:, 1:].unsqueeze(-1)
 
-        return log_prob.sum(dim=-1), out.past_key_values
+        log_probs = F.log_softmax(logits, dim=-1)
+        log_probs = log_probs.gather(-1, targets).squeeze(-1)
+
+        seq_len = log_probs.shape[1]
+
+        return log_probs.sum(dim=-1) / seq_len, out.past_key_values
 
     def from_text_to_reward(self, text, cache=None):
         if self.RM.tokenizer is None:
