@@ -145,13 +145,15 @@ class RewardSampling(BaseRewardSampling):
         batch_size, len_prompt = tokens.shape[0], tokens.shape[1]
         num_llm_call = 0
         llm_cache, draft_cache = None, None
-
+        total_accepted_tokens = 0
+        total_draft_tokens = 0
         while tokens.shape[1] - len_prompt < max_new_token:
 
             # sample a new draft candidate
             candidate = tokens.clone()
             candidate_mask = mask.clone()
 
+            pre_len = candidate.shape[1]
             for _ in range(max_draft_token):
                 logits, draft_cache = self.from_token_to_logit(candidate, candidate_mask, model=self.draft, cache=draft_cache)
 
@@ -183,24 +185,28 @@ class RewardSampling(BaseRewardSampling):
             target_prob = target_dist[:, :-1, :].gather(-1, candidate[:, -max_draft_token:].unsqueeze(-1)).squeeze(-1).detach().cpu()
 
             # accept/reject the candidate
-            accept_pos = -1
+            accept_num = 0
             for i in range(max_draft_token):
                 if random.uniform(0, 1) < min(1., target_prob[:, i] / draft_prob[:, i]):
-                    accept_pos = i
+                    accept_num += 1
                 else:
                     break
+            tokens = candidate[:, :(pre_len + accept_num)]
+            mask = candidate_mask[:, :(pre_len + accept_num)]
 
-            # merge the accepted tokens
-            if accept_pos < 0:
-                # selected_token = self.from_logit_to_token(target_dist[:, 0, :], temperature=beta)
-                # tokens = torch.cat([tokens, selected_token], dim=-1)
-                # mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
-                pass
-            elif accept_pos == max_draft_token - 1:
-                tokens, mask = candidate, candidate_mask
+            total_accepted_tokens += accept_num
+            total_draft_tokens += max_draft_token
+
+            if accept_num == max_draft_token:
+                # bonus token
+                current_dist = target_dist[:, -1, :]
             else:
-                tokens = candidate[:, :-(max_draft_token - accept_pos -1)]
-                mask = candidate_mask[:, :-(max_draft_token - accept_pos - 1)]
+                current_dist = target_dist[:, pre_len + accept_num - 1, :] - draft_dist[:, pre_len + accept_num - 1, :]
+            selected_token = self.from_logit_to_token(current_dist, temperature=beta)
+            tokens = torch.cat([tokens, selected_token], dim=-1)
+            mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
+            
+        print("Acceptance rate: %.3f" % (total_accepted_tokens / total_draft_tokens))
 
         return self.from_token_to_text(tokens), (num_llm_call, 0.)
 
