@@ -202,6 +202,9 @@ class RewardSampling(BaseRewardSampling):
                 current_dist = target_dist[:, -1, :]
             else:
                 current_dist = target_dist[:, pre_len + accept_num - 1, :] - draft_dist[:, pre_len + accept_num - 1, :]
+                f = torch.clamp(current_dist, min=0.0)
+                current_dist = f / torch.sum(f, dim=-1)
+            
             selected_token = self.from_logit_to_token(current_dist, temperature=beta)
             tokens = torch.cat([tokens, selected_token], dim=-1)
             mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
