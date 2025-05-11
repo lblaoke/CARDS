@@ -6,7 +6,7 @@ data_dir: ./alpaca_eval.json
 max_length: 512
 
 llm_dir: meta-llama/Meta-Llama-3-8B-Instruct
-rm_dir: Ray2333/GRM-Llama3-8B-rewardmodel-ft
+gold_rm_dir: Ray2333/GRM-Llama3-8B-rewardmodel-ft
 
 seed: 1
 batch_size: 1

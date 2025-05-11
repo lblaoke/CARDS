@@ -16,6 +16,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-c', '--config', type=str, required=True)
 parser.add_argument('--save', type=str)
 parser.add_argument('--num_test_prompt', type=int)
+
+parser.add_argument('--gamma', type=float)
+
 args = parser.parse_args()
 
 with open(args.config, 'r') as f:
@@ -82,13 +85,14 @@ for key, value in config.items():
 print(f'\n{args.method=}')
 print(f'{args.data_dir=}')
 print(f'{args.llm_dir=}')
-print(f'{args.rm_dir=}\n')
+print(f'{args.gold_rm_dir=}\n')
 
 # init sampler
 sampler_kwargs = {
     'access_token': None,
     'llm_dir': args.llm_dir,
-    'rm_dir': args.rm_dir,
+    'rm_dir': args.rm_dir if hasattr(args, 'rm_dir') else None,
+    'gold_rm_dir': args.gold_rm_dir if hasattr(args, 'gold_rm_dir') else None,
     'draft_dir': args.draft_dir if hasattr(args, 'draft_dir') else None,
     'dpo_dir': args.dpo_dir if hasattr(args, 'dpo_dir') else None,
     'seed': args.seed,
@@ -109,7 +113,9 @@ with autocast(dtype=torch.bfloat16, enabled=True):
                 tokens=tokens,
                 mask=mask,
                 beta=args.temperature,
+                gamma=args.gamma,
                 max_new_token=args.max_new_token,
+                bonus_token=args.bonus_token,
             )
 
         elif args.method == 'grad_rs':
@@ -157,7 +163,7 @@ with autocast(dtype=torch.bfloat16, enabled=True):
                 prompt,
                 method='treebon',
                 max_new_token=args.max_new_token,
-                reward_threshold=4.0#args.reward
+                reward_threshold=args.reward
             )
 
         elif args.method == 'rain': # max_r = 1.5
@@ -166,7 +172,7 @@ with autocast(dtype=torch.bfloat16, enabled=True):
                 prompt,
                 method='rain',
                 max_new_token=args.max_new_token,
-                reward_threshold=1.5#args.reward
+                reward_threshold=args.reward
             )
 
         elif args.method == 'bon':
@@ -222,12 +228,12 @@ if args.save is not None:
 
 # reward evaluation
 sampler.unload_all()
-sampler.load_rm()
+sampler.load_gold_rm()
 total_reward = 0.
 
 with autocast(dtype=torch.bfloat16, enabled=True):
     for row in output:
-        reward = sampler.get_reward([row['output']])
+        reward = sampler.get_gold_reward([row['output']])
         total_reward += reward
 
 print(f'Average reward: {total_reward / num_samples}')

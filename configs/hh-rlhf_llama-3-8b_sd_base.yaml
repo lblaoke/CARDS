@@ -1,16 +1,18 @@
 method: sd
-save: hh-rlhf_llama-3-8b_sss_sft
+save: hh-rlhf_llama-3-8b_sd_base
 save_fmt: json
 
 data_dir: Dahoas/full-hh-rlhf
 max_length: 512
 
 llm_dir: meta-llama/Meta-Llama-3-8B-Instruct
-draft_dir: lblaoke/qwama-0.5b-hh-rlhf-sft-chosen-trl-v4
-rm_dir: argsearch/llama-7b-rm-float32
+draft_dir: turboderp/Qwama-0.5B-Instruct
+gold_rm_dir: argsearch/llama-7b-rm-float32
 
 seed: 1
 batch_size: 1
 max_new_token: 128
 top_k: 40
 temperature: 0.8
+
+bonus_token: True

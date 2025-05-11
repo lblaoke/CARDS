@@ -1,12 +1,12 @@
-method: bon
-save: hh-rlhf_llama-3-8b_bon
+method: cards
+save: hh-rlhf_opt-6.7b_cards
 save_fmt: json
 
 data_dir: Dahoas/full-hh-rlhf
 max_length: 512
 
-llm_dir: meta-llama/Meta-Llama-3-8B-Instruct
-rm_dir: Ray2333/GRM-Llama3-8B-rewardmodel-ft
+llm_dir: facebook/opt-6.7b
+rm_dir: lblaoke/opt-125m-hh-rlhf-rm-trl-v5
 gold_rm_dir: argsearch/llama-7b-rm-float32
 
 seed: 1
@@ -15,4 +15,6 @@ max_new_token: 128
 top_k: 40
 temperature: 0.8
 
-bon_n: 5
+reward: 0.2
+entropy: 3.0
+alpha: 0.5

@@ -12,6 +12,7 @@ class BaseRewardSampling:
         self.tokenizer = None
         self.LLM = None
         self.RM = None
+        self.gold_rm = None
         self.dpo_ckpt = None
         self.draft = None
 
@@ -101,6 +102,17 @@ class BaseRewardSampling:
         reward, cache = out.logits.flatten(), out.past_key_values
         del out
         return reward, cache
+    
+    def from_token_to_gold_reward(self, token, mask=None, cache=None):
+        out = self.gold_rm(
+            input_ids = token,
+            attention_mask = mask,
+            past_key_values = cache,
+            use_cache = self.use_cache,
+        )
+        reward, cache = out.logits.flatten(), out.past_key_values
+        del out
+        return reward, cache
 
     def from_token_to_implicit_reward(self, token, mask=None, cache=None):
         out = self.LLM(
@@ -121,11 +133,11 @@ class BaseRewardSampling:
         return log_probs.sum(dim=-1) / seq_len, out.past_key_values
 
     def from_text_to_reward(self, text, cache=None):
-        if self.RM.tokenizer is None:
-            tokens, mask = self.from_text_to_token(text)
-        else:
+        if hasattr(self.RM, 'tokenizer'):
             out = self.RM.tokenizer(text, padding=True)
             tokens, mask = out.input_ids, out.attention_mask
+        else:
+            tokens, mask = self.from_text_to_token(text)
 
         tokens, mask = torch.tensor(tokens, device=self.RM.device), torch.tensor(mask, device=self.RM.device)
         reward, cache = self.from_token_to_reward(tokens, mask, cache=cache)

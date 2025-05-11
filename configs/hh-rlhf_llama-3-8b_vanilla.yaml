@@ -6,7 +6,7 @@ data_dir: Dahoas/full-hh-rlhf
 max_length: 512
 
 llm_dir: meta-llama/Meta-Llama-3-8B-Instruct
-rm_dir: argsearch/llama-7b-rm-float32
+gold_rm_dir: argsearch/llama-7b-rm-float32
 
 seed: 1
 batch_size: 1
