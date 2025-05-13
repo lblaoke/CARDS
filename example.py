@@ -1,12 +1,16 @@
-from transformers import AutoTokenizer
+from reward_sampling import RewardSampling
 
-t1 = AutoTokenizer.from_pretrained('meta-llama/Meta-Llama-3-8B-Instruct')
-t2 = AutoTokenizer.from_pretrained('turboderp/Qwama-0.5B-Instruct')
+sampler = RewardSampling(llm_dir="meta-llama/Meta-Llama-3-8B-Instruct", draft_dir="turboderp/Qwama-0.5B-Instruct")
+# sampler = RewardSampling(llm_dir="turboderp/Qwama-0.5B-Instruct")
 
-tokens = t1('I don\'t know why I\'m so upset.').input_ids
-print(tokens)
+# sampler = RewardSampling(llm_dir="facebook/opt-6.7b", draft_dir="facebook/opt-125m")
 
-tokens = t2('I don\'t know why I\'m so upset.').input_ids
-print(tokens)
+ret = sampler.sd_generate(["Can you explain the difference between a cat and a dog?"], max_new_token=64)
 
-print(t1.decode(tokens))
+print(ret[0][0])
+
+print("==="*20)
+
+ret = sampler.generate(["Can you explain the difference between a cat and a dog?"], max_new_token=64)
+
+print(ret[0][0])

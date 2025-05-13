@@ -1,18 +1,18 @@
-method: sd
-save: hh-rlhf_llama-3-8b_sd_dpo
+method: treebon
+save: hh-rlhf_opt-13b_treebon
 save_fmt: json
 
 data_dir: Dahoas/full-hh-rlhf
 max_length: 512
 
-llm_dir: meta-llama/Meta-Llama-3-8B-Instruct
-draft_dir: lblaoke/qwama-0.5b-hh-rlhf-dpo-trl-v4
+llm_dir: facebook/opt-13b
+dpo_dir: lblaoke/opt-350m-hh-rlhf-dpo-trl-v5
 gold_rm_dir: argsearch/llama-7b-rm-float32
 
 seed: 1
 batch_size: 1
 max_new_token: 128
-top_k: 40
+top_k: 5
 temperature: 0.8
 
-bonus_token: True
+reward: -6.5

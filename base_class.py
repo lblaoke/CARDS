@@ -78,17 +78,19 @@ class BaseRewardSampling:
             'attention_mask': mask,
             'past_key_values': cache,
             'use_cache': self.use_cache,
-            'logits_to_keep': logits_to_keep,
+            # 'logits_to_keep': logits_to_keep,
         }
-        if logits_to_keep < 0 or isinstance(self.LLM, transformers.OPTForCausalLM):
-            kwargs.pop('logits_to_keep', None)
+        # if logits_to_keep < 0 or isinstance(self.LLM, transformers.OPTForCausalLM):
+        #     kwargs.pop('logits_to_keep', None)
 
         out = self.LLM(**kwargs) if model is None else model(**kwargs)
         logits, cache = out.logits, out.past_key_values
         del out
 
         if logits_to_keep == 1:
-            logits = logits[:, -1]
+            logits = logits[:, -1, :]
+        # elif logits_to_keep > 1 and isinstance(self.LLM, transformers.OPTForCausalLM):
+        #     logits = logits[:, -logits_to_keep:, :]
 
         return logits, cache
 

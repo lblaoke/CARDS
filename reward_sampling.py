@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification, BitsAndBytesConfig, OPTForCausalLM
 
 from tqdm import tqdm
 import random
@@ -148,7 +148,7 @@ class RewardSampling(BaseRewardSampling):
         tokens = None,
         mask = None,
         beta: float = 0.8,
-        gamma: float = 0.5,
+        gamma: float = 0.0,
         topk: int = 40,
         max_draft_token: int = 4,
         max_new_token: int = 128,
@@ -185,8 +185,8 @@ class RewardSampling(BaseRewardSampling):
                 cache = draft_cache,
             )
 
-            draft_dist = F.softmax(logits / beta, dim=-1)
-            draft_prob = draft_dist[:, :-1, :].gather(-1, candidate[:, -max_draft_token:].unsqueeze(-1)).squeeze(-1).detach().cpu()
+            draft_log_dist = F.log_softmax(logits / beta, dim=-1)
+            draft_log_prob = draft_log_dist[:, :-1, :].gather(-1, candidate[:, -max_draft_token:].unsqueeze(-1)).squeeze(-1).detach().cpu()
 
             logits, llm_cache = self.from_token_to_logit(
                 token = candidate,
@@ -196,13 +196,13 @@ class RewardSampling(BaseRewardSampling):
             )
             num_llm_call += batch_size
 
-            target_dist = F.softmax(logits / beta, dim=-1)
-            target_prob = target_dist[:, :-1, :].gather(-1, candidate[:, -max_draft_token:].unsqueeze(-1)).squeeze(-1).detach().cpu()
+            target_log_dist = F.log_softmax(logits / beta, dim=-1)
+            target_log_prob = target_log_dist[:, :-1, :].gather(-1, candidate[:, -max_draft_token:].unsqueeze(-1)).squeeze(-1).detach().cpu()
 
             # accept/reject the candidate
             accept_num = 0
             for i in range(max_draft_token):
-                if random.uniform(0, 1) < min(1., target_prob[:, i] / draft_prob[:, i]):
+                if random.uniform(0, 1) < min(1., torch.exp(target_log_prob[:, i] - draft_log_prob[:, i])):
                     accept_num += 1
                 else:
                     break
@@ -212,21 +212,12 @@ class RewardSampling(BaseRewardSampling):
             total_accepted_tokens += accept_num
             total_draft_tokens += max_draft_token
 
-            if bonus_token:
-                if accept_num == max_draft_token:
-                    # bonus token
-                    # current_dist = target_dist[:, -1, :]
-                    pass
-                else:
-                    # current_dist = target_dist[:, pre_len + accept_num - 1, :] - draft_dist[:, pre_len + accept_num - 1, :]
-                    current_dist = torch.exp(torch.log(target_dist[:, pre_len + accept_num - 1, :]) + gamma * torch.log(draft_dist[:, pre_len + accept_num - 1, :]))
-                    # current_dist = torch.clamp(current_dist, min=0.0)
-                    current_dist = current_dist / torch.sum(current_dist, dim=-1)
+            if bonus_token and (accept_num < max_draft_token):
+                current_log_dist = target_log_dist[:, pre_len + accept_num - 1, :] + gamma * draft_log_dist[:, pre_len + accept_num - 1, :]
+                selected_token = self.from_logit_to_token(current_log_dist, temperature=beta)
+                tokens = torch.cat([tokens, selected_token], dim=-1)
+                mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
 
-                    selected_token = self.from_logit_to_token(current_dist, temperature=beta)
-                    tokens = torch.cat([tokens, selected_token], dim=-1)
-                    mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
-            
         # print("Acceptance rate: %.3f" % (total_accepted_tokens / total_draft_tokens))
 
         return self.from_token_to_text(tokens), (num_llm_call, 0.)
@@ -256,7 +247,7 @@ class RewardSampling(BaseRewardSampling):
             if reward > reward_best:
                 tokens_best, reward_best = tokens.clone(), reward
 
-        # print(f'{reward_best=}')
+        print(f'{reward_best=}')
             
         return self.from_token_to_text(tokens_best), (num_llm_call, num_rm_call)
 

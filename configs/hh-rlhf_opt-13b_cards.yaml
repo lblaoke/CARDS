@@ -1,12 +1,12 @@
-method: sd
-save: hh-rlhf_opt-6.7b_sd_no_bonus_sft
+method: cards
+save: hh-rlhf_opt-13b_cards
 save_fmt: json
 
 data_dir: Dahoas/full-hh-rlhf
 max_length: 512
 
-llm_dir: facebook/opt-6.7b
-draft_dir: lblaoke/opt-125m-hh-rlhf-chosen-sft-trl-v5
+llm_dir: facebook/opt-13b
+rm_dir: lblaoke/opt-350m-hh-rlhf-rm-trl-v5
 gold_rm_dir: argsearch/llama-7b-rm-float32
 
 seed: 1
@@ -15,4 +15,6 @@ max_new_token: 128
 top_k: 40
 temperature: 0.8
 
-bonus_token: False
+reward: -0.5
+entropy: 3.0
+alpha: 0.5

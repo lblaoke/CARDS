@@ -23,7 +23,7 @@ parser.add_argument('--batch_size', type=int, default=1)
 
 args = parser.parse_args()
 
-rs = RewardSampling(llm_dir=args.llm_dir, rm_dir=args.rm_dir)
+rs = RewardSampling(llm_dir=args.llm_dir, gold_rm_dir=args.rm_dir)
 data = data_loader.PRCR_loader(args, rs.tokenizer, head=100, max_length=512)
 
 with autocast(dtype=torch.bfloat16):
@@ -91,12 +91,12 @@ with autocast(dtype=torch.bfloat16):
 print('generated likelihood:', sum(likelihood)/len(likelihood))
 
 rs.unload_all()
-rs.load_rm()
+rs.load_gold_rm()
 total_reward = 0.
 
 with autocast(dtype=torch.bfloat16, enabled=True):
     for row in output:
-        reward = rs.get_reward([row['output']])
+        reward = rs.get_gold_reward([row['output']])
         total_reward += reward
 
 print(f'Average reward: {total_reward / len(output)}')

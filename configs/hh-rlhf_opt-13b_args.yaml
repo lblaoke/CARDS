@@ -1,0 +1,16 @@
+method: args
+save: hh-rlhf_opt-13b_args
+save_fmt: json
+
+data_dir: Dahoas/full-hh-rlhf
+max_length: 512
+
+llm_dir: facebook/opt-13b
+rm_dir: lblaoke/opt-350m-hh-rlhf-rm-trl-v5
+gold_rm_dir: argsearch/llama-7b-rm-float32
+
+seed: 1
+batch_size: 1
+max_new_token: 128
+top_k: 5
+temperature: 0.8

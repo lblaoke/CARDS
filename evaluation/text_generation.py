@@ -17,7 +17,7 @@ parser.add_argument('-c', '--config', type=str, required=True)
 parser.add_argument('--save', type=str)
 parser.add_argument('--num_test_prompt', type=int)
 
-parser.add_argument('--gamma', type=float)
+parser.add_argument('--gamma', type=float, default=0.0)
 
 args = parser.parse_args()
 
