@@ -14,7 +14,9 @@ class BaseRewardSampling:
         self.RM = None
         self.gold_rm = None
         self.dpo_ckpt = None
+
         self.draft = None
+        self.draft_r = None
 
     ###################
     # basic functions #
@@ -159,6 +161,7 @@ class BaseRewardSampling:
         top_k:int = 1,
         temperature:float = 1.,
         return_prob:bool = False, # also return the probability of the selected token
+        already_probs:bool = False, # if the logit is already a probability
     ):
         if discard_token is not None:
             batch_idx = torch.arange(logit.shape[0], dtype=discard_token.dtype, device=discard_token.device)
@@ -168,12 +171,13 @@ class BaseRewardSampling:
         if top_k == 1:
             selected_token = torch.argmax(logit, dim=-1, keepdim=True)
         else:
-            val, idx = torch.topk(logit, k=top_k, dim=-1)
-            selected_idx = torch.multinomial(F.softmax(val / temperature, dim=-1), num_samples=1)
+            prob = logit if already_probs else F.softmax(logit / temperature, dim=-1)
+            val, idx = torch.topk(prob, k=top_k, dim=-1)
+            selected_idx = torch.multinomial(val, num_samples=1)
             selected_token = torch.gather(idx, -1, selected_idx)
 
         if return_prob:
-            prob = F.softmax(logit / temperature, dim=-1)
+            prob = logit if already_probs else F.softmax(logit / temperature, dim=-1)
             return selected_token, prob.gather(-1, selected_token)
         else:
             return selected_token

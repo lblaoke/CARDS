@@ -18,6 +18,7 @@ class RewardSampling(BaseRewardSampling):
             gold_rm_dir: str = None,
             dpo_dir: str = None,
             draft_dir: str = None,
+            draft_r_dir: str = None,
             cache_dir: str = None,
             access_token: str = None,
             seed: int = 1,
@@ -52,6 +53,7 @@ class RewardSampling(BaseRewardSampling):
         if draft_dir is not None:
             print('\n==> Loading Draft Model...')
             self.draft = AutoModelForCausalLM.from_pretrained(draft_dir, **self.model_kwargs)
+            self.draft_r = AutoModelForCausalLM.from_pretrained(draft_r_dir, **self.model_kwargs)
 
         # add padding token if not exist
         if self.tokenizer.pad_token is None:
@@ -148,7 +150,6 @@ class RewardSampling(BaseRewardSampling):
         tokens = None,
         mask = None,
         beta: float = 0.8,
-        gamma: float = 0.0,
         topk: int = 40,
         max_draft_token: int = 4,
         max_new_token: int = 128,
@@ -213,12 +214,113 @@ class RewardSampling(BaseRewardSampling):
             total_draft_tokens += max_draft_token
 
             if bonus_token and (accept_num < max_draft_token):
-                current_log_dist = target_log_dist[:, pre_len + accept_num - 1, :] + gamma * draft_log_dist[:, pre_len + accept_num - 1, :]
-                selected_token = self.from_logit_to_token(current_log_dist, temperature=beta)
+                current_dist = torch.exp(target_log_dist[:, pre_len + accept_num - 1, :]) - torch.exp(draft_log_dist[:, pre_len + accept_num - 1, :])
+                current_dist = torch.clamp(current_dist, min=0.0)
+                current_dist = current_dist / torch.sum(current_dist, dim=-1)
+
+                selected_token = self.from_logit_to_token(current_dist, temperature=beta, already_probs=True)
                 tokens = torch.cat([tokens, selected_token], dim=-1)
                 mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
 
         # print("Acceptance rate: %.3f" % (total_accepted_tokens / total_draft_tokens))
+
+        return self.from_token_to_text(tokens), (num_llm_call, 0.)
+
+    # Shifted Speculative Sampling
+    @torch.no_grad()
+    def sss_generate(
+        self,
+        prompt = None,
+        tokens = None,
+        mask = None,
+        beta: float = 0.8,
+        gamma: float = 1.0,
+        topk: int = 40,
+        max_draft_token: int = 4,
+        max_new_token: int = 128,
+        bonus_token: bool = True,
+    ):
+        if tokens is None or mask is None:
+            tokens, mask = self.from_text_to_token(prompt)
+        tokens, mask = torch.tensor(tokens, device=self.LLM.device), torch.tensor(mask, device=self.LLM.device)
+        batch_size, len_prompt = tokens.shape[0], tokens.shape[1]
+        num_llm_call = 0
+        llm_cache, draft_cache, draft_r_cache = None, None, None
+        total_accepted_tokens = 0
+        total_draft_tokens = 0
+
+        while tokens.shape[1] - len_prompt < max_new_token:
+            candidate = tokens.clone()
+            candidate_mask = mask.clone()
+            pre_len = candidate.shape[1]
+
+            # aligned draft model sample new draft tokens
+            for _ in range(max_draft_token):
+                logits, draft_r_cache = self.from_token_to_logit(candidate, candidate_mask, model=self.draft_r, cache=draft_r_cache)
+
+                selected_token = self.from_logit_to_token(logits, top_k=topk, temperature=beta)
+                candidate = torch.cat([candidate, selected_token], dim=-1)
+                candidate_mask = torch.cat([candidate_mask, torch.ones_like(selected_token)], dim=-1)
+
+            # aligned draft model verify the candidate
+            logits, draft_r_cache = self.from_token_to_logit(
+                token = candidate,
+                mask = candidate_mask,
+                model = self.draft_r,
+                logits_to_keep = max_draft_token + 1,
+                cache = draft_r_cache,
+            )
+            draft_r_log_dist = F.log_softmax(logits / beta, dim=-1)
+            draft_r_log_prob = draft_r_log_dist[:, :-1, :].gather(-1, candidate[:, -max_draft_token:].unsqueeze(-1)).squeeze(-1).detach().cpu()
+
+            # SFT draft model verify the candidate
+            logits, draft_cache = self.from_token_to_logit(
+                token = candidate,
+                mask = candidate_mask,
+                model = self.draft,
+                logits_to_keep = max_draft_token + 1,
+                cache = draft_cache,
+            )
+            draft_log_dist = F.log_softmax(logits / beta, dim=-1)
+            draft_log_prob = draft_log_dist[:, :-1, :].gather(-1, candidate[:, -max_draft_token:].unsqueeze(-1)).squeeze(-1).detach().cpu()
+
+            # Target model verify the candidate
+            logits, llm_cache = self.from_token_to_logit(
+                token = candidate,
+                mask = candidate_mask,
+                logits_to_keep = max_draft_token + 1,
+                cache = llm_cache,
+            )
+            num_llm_call += batch_size
+            target_log_dist = F.log_softmax(logits / beta, dim=-1)
+            target_log_prob = target_log_dist[:, :-1, :].gather(-1, candidate[:, -max_draft_token:].unsqueeze(-1)).squeeze(-1).detach().cpu()
+
+            # accept/reject the candidate
+            accept_num = 0
+            for i in range(max_draft_token):
+                if random.uniform(0, 1) < min(1., torch.exp(target_log_prob[:, i] - draft_r_log_prob[:, i])):
+                    accept_num += 1
+                else:
+                    break
+            tokens = candidate[:, :(pre_len + accept_num)]
+            mask = candidate_mask[:, :(pre_len + accept_num)]
+
+            total_accepted_tokens += accept_num
+            total_draft_tokens += max_draft_token
+
+            if bonus_token and (accept_num < max_draft_token):
+                current_dist = torch.exp(target_log_dist[:, pre_len + accept_num - 1, :] \
+                                            + draft_r_log_dist[:, pre_len + accept_num - 1, :] \
+                                            - draft_log_dist[:, pre_len + accept_num - 1, :] \
+                                        ) \
+                                # - torch.exp(draft_r_log_dist[:, pre_len + accept_num - 1, :])
+
+                current_dist = torch.clamp(current_dist, min=0.0)
+                current_dist = current_dist / torch.sum(current_dist, dim=-1)
+
+                selected_token = self.from_logit_to_token(current_dist, temperature=beta, already_probs=True)
+                tokens = torch.cat([tokens, selected_token], dim=-1)
+                mask = torch.cat([mask, torch.ones_like(selected_token)], dim=-1)
 
         return self.from_token_to_text(tokens), (num_llm_call, 0.)
 

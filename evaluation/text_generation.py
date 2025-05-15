@@ -17,7 +17,7 @@ parser.add_argument('-c', '--config', type=str, required=True)
 parser.add_argument('--save', type=str)
 parser.add_argument('--num_test_prompt', type=int)
 
-parser.add_argument('--gamma', type=float, default=0.0)
+parser.add_argument('--gamma', type=float, default=1.0)
 
 args = parser.parse_args()
 
@@ -94,6 +94,7 @@ sampler_kwargs = {
     'rm_dir': args.rm_dir if hasattr(args, 'rm_dir') else None,
     'gold_rm_dir': args.gold_rm_dir if hasattr(args, 'gold_rm_dir') else None,
     'draft_dir': args.draft_dir if hasattr(args, 'draft_dir') else None,
+    'draft_r_dir': args.draft_r_dir if hasattr(args, 'draft_r_dir') else None,
     'dpo_dir': args.dpo_dir if hasattr(args, 'dpo_dir') else None,
     'seed': args.seed,
 }
@@ -108,12 +109,21 @@ with autocast(dtype=torch.bfloat16, enabled=True):
     for row in tqdm(data):
         prompt, tokens, mask = row['prompt'], row['input_ids'], row['attention_mask']
 
-        if args.method == 'sd':
-            response, (num_llm_call, num_rm_call) = sampler.sd_generate(
+        if args.method == 'sss':
+            response, (num_llm_call, num_rm_call) = sampler.sss_generate(
                 tokens=tokens,
                 mask=mask,
                 beta=args.temperature,
                 gamma=args.gamma,
+                max_new_token=args.max_new_token,
+                bonus_token=args.bonus_token,
+            )
+
+        elif args.method == 'sd':
+            response, (num_llm_call, num_rm_call) = sampler.sd_generate(
+                tokens=tokens,
+                mask=mask,
+                beta=args.temperature,
                 max_new_token=args.max_new_token,
                 bonus_token=args.bonus_token,
             )

@@ -1,0 +1,19 @@
+method: sss
+save: hh-rlhf_opt-13b_sss
+save_fmt: json
+
+data_dir: Dahoas/full-hh-rlhf
+max_length: 512
+
+llm_dir: facebook/opt-13b
+draft_dir: lblaoke/opt-350m-hh-rlhf-chosen-sft-trl-v5
+draft_r_dir: lblaoke/opt-350m-hh-rlhf-dpo-trl-v5
+gold_rm_dir: argsearch/llama-7b-rm-float32
+
+seed: 1
+batch_size: 1
+max_new_token: 128
+top_k: 40
+temperature: 0.8
+
+bonus_token: True
