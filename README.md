@@ -1,3 +1,6 @@
+# Reward-Shifted Speculative Sampling Is An Efficient Test-Time Weak-to-Strong Aligner
+[EMNLP 2025](https://aclanthology.org/2025.emnlp-main.578/)
+
 # Cascade Reward Sampling for Efficient Decoding-Time Alignment
 [This paper](https://arxiv.org/pdf/2406.16306) focuses on the efficiency of decoding-time alignment, with an uncertainty-based segment-level rejection sampling algorithm proposed to balance the number of LLM & RM calls. Compared to traditional token-level reward searching, CARDS achieves higher reward and faster generation at the same time.
 
